@@ -1,0 +1,57 @@
+import { afterEach, expect, it } from 'vitest';
+import { writeFile, readFile } from 'node:fs/promises';
+import { join, dirname } from 'node:path';
+import { cleanup, fixture, imported, png } from './helpers.js';
+import { importStory, loadStory } from '../src/core/project.js';
+import { createPlan, loadPlan, validatePlan } from '../src/core/planning.js';
+import { registerAsset, inspectAssets } from '../src/assets/registry.js';
+import { inspectImage } from '../src/assets/image.js';
+import { validateRequest } from '../src/metaso/h3.js';
+afterEach(cleanup);
+it('creates an immutable offline text plan with explicit Context IR and watermark settings', async () => {
+  const f = await imported(); const plan = await createPlan(f.root, 'ep-1');
+  expect(plan.segments[0]).toMatchObject({ model: 'MiniMax-H3', resolution: '768P', duration: 6, effectiveRatio: '9:16', contextIr: false, watermark: false, mode: 'text' });
+  expect((await loadPlan(f.root, plan.planId)).planHash).toBe(plan.planHash);
+  const { built } = await validatePlan(f.root, plan);
+  expect(built[0]!.request.content).toEqual([{ type: 'text', text: f.text }]);
+  const file = join(f.root, `.metasocli/plans/${plan.planId}.json`);
+  await writeFile(file, (await readFile(file, 'utf8')).replace('768P', '2K'));
+  await expect(loadPlan(f.root, plan.planId)).rejects.toMatchObject({ code: 'PLAN_TAMPERED' });
+});
+it('copies images, preserves ordering, and detects source or material changes', async () => {
+  const f = await fixture('镜头 {{ref:b}} 然后 {{ref:a}}。');
+  await importStory(f.root, { ...f.draft, recipes: ['a', 'b'].map(assetId => ({ assetId, kind: 'character', prompt: assetId })), segments: [{ ...f.draft.segments[0], references: [{ assetId: 'a', role: 'reference_image' }, { assetId: 'b', role: 'reference_image' }] }] });
+  await expect(createPlan(f.root, 'ep-1')).rejects.toMatchObject({ code: 'MISSING_ASSET' });
+  const image = join(dirname(f.root), 'image.png'); await writeFile(image, png());
+  await registerAsset(f.root, 'a', { file: image }); await registerAsset(f.root, 'b', { file: image });
+  const plan = await createPlan(f.root, 'ep-1');
+  expect(plan.segments[0]!.assets.map(a => a.assetId)).toEqual(['a', 'b']);
+  expect(plan.segments[0]!.renderedPrompt).toBe('镜头 参考图2 然后 参考图1。');
+  await writeFile(image, 'external change'); await validatePlan(f.root, plan);
+  const s = await loadStory(f.root); await writeFile(join(f.root, s.assets[0]!.media!.path), png(512, 512));
+  await expect(validatePlan(f.root, plan)).rejects.toMatchObject({ code: 'ASSET_CHANGED' });
+  expect((await inspectAssets(f.root))[0]!.status).toBe('changed');
+});
+it('first-frame mode exposes effective adaptive ratio and rejects mixed references', async () => {
+  const f = await fixture(); const image = join(dirname(f.root), 'frame.png'); await writeFile(image, png());
+  await importStory(f.root, { ...f.draft, recipes: [{ assetId: 'frame', kind: 'first_frame', prompt: '首帧' }], segments: [{ ...f.draft.segments[0], references: [{ assetId: 'frame', role: 'first_frame' }] }] });
+  await registerAsset(f.root, 'frame', { file: image });
+  const plan = await createPlan(f.root, 'ep-1');
+  expect(plan.segments[0]).toMatchObject({ requestedRatio: '9:16', effectiveRatio: 'adaptive', mode: 'first-frame' });
+  const { built } = await validatePlan(f.root, plan); const req = built[0]!.request;
+  expect(() => validateRequest({ ...req, content: [...req.content, { type: 'image_url', role: 'reference_image', image_url: { url: 'https://example.com/img.png' } }] })).toThrow();
+});
+it('rejects Seedance settings, invalid H3 durations and unsupported images', async () => {
+  const f = await fixture();
+  await expect(importStory(f.root, { ...f.draft, segments: [{ ...f.draft.segments[0], duration: 3 }] })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  await expect(importStory(f.root, { ...f.draft, segments: [{ ...f.draft.segments[0], parameters: { resolution: '480p' } }] })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  expect(() => inspectImage(Buffer.from('not an image'))).toThrow();
+  expect(() => inspectImage(png(128, 128))).toThrow(expect.objectContaining({ code: 'IMAGE_DIMENSIONS' }));
+});
+it('records verified public URL bytes while keeping signed links out of plans', async () => {
+  const f = await fixture();
+  await importStory(f.root, { ...f.draft, recipes: [{ assetId: 'a', kind: 'scene', prompt: '室内' }], segments: [{ ...f.draft.segments[0], references: [{ assetId: 'a', role: 'reference_image' }] }] });
+  await registerAsset(f.root, 'a', { url: 'https://example.com/a.png?signature=private' }, async () => new Response(png()));
+  const plan = await createPlan(f.root, 'ep-1');
+  expect(plan.segments[0]!.assets[0]!.transport).toBe('url'); expect(JSON.stringify(plan)).not.toContain('signature');
+});
