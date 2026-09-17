@@ -38,6 +38,12 @@ if ($Mode -eq 'capture') {
   Write-Output "Captured $($files.Count) file hashes and old Git/command state."
 } else {
   if (-not (Test-Path -LiteralPath $output)) { throw 'Capture baseline first' }
-  if ((Get-Content -LiteralPath $output -Raw) -ne $json) { throw 'Isolation baseline changed; inspect before proceeding' }
+  $before = Get-Content -LiteralPath $output -Raw | ConvertFrom-Json
+  $oldLines = @('git=' + ($before.gitStatus -join "`n"), 'commands=' + ($before.commands -join "`n")) + @($before.files | ForEach-Object { $_.path + '=' + $_.sha256 } | Sort-Object)
+  $newLines = @('git=' + ($gitState -join "`n"), 'commands=' + ($commands -join "`n")) + @($files | ForEach-Object { $_.path + '=' + $_.sha256 } | Sort-Object)
+  $difference = Compare-Object -ReferenceObject $oldLines -DifferenceObject $newLines -CaseSensitive
+  $report = [ordered]@{ checkedAtUtc=[DateTime]::UtcNow.ToString('o'); fileCount=$files.Count; gitUnchanged=(($before.gitStatus -join "`n") -ceq ($gitState -join "`n")); commandPathsUnchanged=(($before.commands -join "`n") -ceq ($commands -join "`n")); differences=@($difference) }
+  [IO.File]::WriteAllText((Join-Path $workspace '.work/isolation-check.json'),($report | ConvertTo-Json -Depth 8))
+  if ($difference) { $difference | Format-Table; throw 'Isolation baseline changed; see .work/isolation-check.json. Do not overwrite shared configuration.' }
   Write-Output "Verified: $($files.Count) file hashes, old Git state and global command paths unchanged."
 }

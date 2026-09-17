@@ -28,7 +28,9 @@ export async function loadStory(input: string): Promise<Story> {
   return story;
 }
 export async function saveStory(root: string, story: Story): Promise<void> {
-  await atomicWrite(await projectPath(root, 'metasocli.yaml'), stringify(parse(Manifest, story)));
+  const text = stringify(parse(Manifest, story));
+  if (Buffer.byteLength(text) > 8 * 1024 * 1024) fail('FILE_LIMIT', 'Story manifest exceeds the local 8 MiB limit. Split the story.');
+  await atomicWrite(await projectPath(root, 'metasocli.yaml'), text);
 }
 export async function initializeStory(input: string, name: string): Promise<Story> {
   const checked = await safePath(input);
@@ -74,13 +76,28 @@ export async function importStory(root: string, value: unknown, replace = false)
       if (!previousAsset) nextAssets.push({ recipe, recipeHash, media: null });
     }
     for (const asset of nextAssets) {
-      if (asset.recipe.dependencies.some(id => !nextAssets.some(a => a.recipe.assetId === id) || id === asset.recipe.assetId)) fail('RECIPE_DEPENDENCY', 'Recipe dependencies must reference other declared assets.');
+      if (new Set(asset.recipe.dependencies).size !== asset.recipe.dependencies.length || asset.recipe.dependencies.some(id => !nextAssets.some(a => a.recipe.assetId === id) || id === asset.recipe.assetId)) fail('RECIPE_DEPENDENCY', 'Recipe dependencies must uniquely reference other declared assets.');
     }
+    const visited = new Set<string>(), active = new Set<string>();
+    const visit = (id: string) => {
+      if (active.has(id)) fail('RECIPE_DEPENDENCY', 'Asset recipes contain a dependency cycle.');
+      if (visited.has(id)) return;
+      active.add(id); for (const dependency of nextAssets.find(a => a.recipe.assetId === id)!.recipe.dependencies) visit(dependency);
+      active.delete(id); visited.add(id);
+    };
+    for (const asset of nextAssets) visit(asset.recipe.assetId);
     for (const s of episode.segments) for (const ref of s.references) {
       if (!nextAssets.some(a => a.recipe.assetId === ref.assetId)) fail('MISSING_RECIPE', `Missing recipe for ${ref.assetId}.`);
     }
     const episodes = previous ? story.episodes.map(e => e.id === episode.id ? episode : e) : [...story.episodes, episode];
-    if (canonicalSha256({ episodes, assets: nextAssets }) === canonicalSha256({ episodes: story.episodes, assets: story.assets })) return story;
+    if (canonicalSha256({ episodes, assets: nextAssets }) === canonicalSha256({ episodes: story.episodes, assets: story.assets })) {
+      let intact = false;
+      try {
+        intact = sha256Hex(await readStable(await projectPath(root, episode.source.rawPath))) === rawHash
+          && sha256Hex(await readStable(await projectPath(root, episode.source.textPath))) === textHash;
+      } catch { /* Reimport the explicit source to restore its missing snapshots. */ }
+      if (intact) return story;
+    }
     await atomicWrite(await projectPath(root, episode.source.rawPath), raw);
     await atomicWrite(await projectPath(root, episode.source.textPath), text);
     const next = { ...story, revision: story.revision + 1, episodes, assets: nextAssets };

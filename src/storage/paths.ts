@@ -3,7 +3,8 @@ import path from 'node:path';
 import { homedir } from 'node:os';
 import { fail, isCode } from '../core/errors.js';
 
-const oldNames = new Set(['.story2libtv', '.story2libtv-runtime', '.libtv']);
+const oldNames = new Set(['.story2libtv', '.story2libtv-runtime', '.story2libtv-work', '.libtv',
+  'story-to-libtv', 'video-prompt-to-libtv', 'seedance-segment-prompt-engine', 'story-reference-image-builder']);
 const key = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
 export function contains(root: string, value: string): boolean {
   const rel = path.relative(key(path.resolve(root)), key(path.resolve(value)));

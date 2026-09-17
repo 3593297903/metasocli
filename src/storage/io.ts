@@ -52,7 +52,11 @@ export async function atomicWrite(target: string, bytes: string | Uint8Array): P
     if (!renamed) await unlink(temp).catch(() => {});
   }
 }
-export const writeJson = (target: string, value: unknown) => atomicWrite(target, `${JSON.stringify(value, null, 2)}\n`);
+export async function writeJson(target: string, value: unknown): Promise<void> {
+  const text = `${JSON.stringify(value, null, 2)}\n`;
+  if (Buffer.byteLength(text) > 8 * 1024 * 1024) fail('FILE_LIMIT', 'Structured record exceeds the local 8 MiB limit. Split the episode.');
+  await atomicWrite(target, text);
+}
 export async function readJson(file: string): Promise<unknown> {
   try { return JSON.parse((await readStable(file)).toString('utf8')); }
   catch (e) { if (e instanceof SyntaxError) fail('INVALID_JSON', 'Stored JSON is invalid; preserve it for recovery.'); throw e; }

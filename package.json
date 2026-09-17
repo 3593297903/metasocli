@@ -12,6 +12,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --pool=threads",
+    "test:process": "node scripts/process-smoke.mjs",
     "check": "npm run build && npm test",
     "prepack": "npm run build"
   },

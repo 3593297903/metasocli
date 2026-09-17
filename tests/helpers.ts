@@ -21,3 +21,10 @@ export function png(width = 256, height = 256): Buffer {
   const header = Buffer.alloc(13); header.writeUInt32BE(width); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 2;
   return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk('IHDR', header), chunk('IDAT', deflateSync(Buffer.alloc(height * (width * 3 + 1)))), chunk('IEND', Buffer.alloc(0))]);
 }
+export function mp4(duration = 6): Buffer {
+  function box(name: string, body: Buffer) { const h = Buffer.alloc(8); h.writeUInt32BE(body.length + 8); h.write(name, 4); return Buffer.concat([h, body]); }
+  const mvhd = Buffer.alloc(100); mvhd.writeUInt32BE(1000, 12); mvhd.writeUInt32BE(duration * 1000, 16);
+  const tkhd = Buffer.alloc(84); tkhd.writeUInt32BE(768 * 65536, 76); tkhd.writeUInt32BE(1366 * 65536, 80);
+  const hdlr = Buffer.alloc(24); hdlr.write('vide', 8);
+  return Buffer.concat([box('ftyp', Buffer.from('isom\0\0\0\0isom')), box('moov', Buffer.concat([box('mvhd', mvhd), box('trak', Buffer.concat([box('tkhd', tkhd), box('mdia', box('hdlr', hdlr))]))])), box('mdat', Buffer.alloc(64, 1))]);
+}

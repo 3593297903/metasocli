@@ -19,7 +19,7 @@ export interface Evidence { sha256: string; response: unknown; httpStatus?: numb
 export class ProviderError extends MetasoError {
   constructor(code: string, message: string, readonly options: { rejected?: boolean; retryable?: boolean; retryAfterMs?: number; evidence?: Evidence } = {}) { super(code, message); }
 }
-const TaskId = z.union([z.string().min(1).max(200).regex(/^[A-Za-z0-9_-]+$/u), z.number().int().positive().max(Number.MAX_SAFE_INTEGER).transform(String)]);
+export const TaskId = z.union([z.string().min(1).max(200).regex(/^[A-Za-z0-9_-]+$/u), z.number().int().positive().max(Number.MAX_SAFE_INTEGER).transform(String)]);
 export interface Submission { taskId: string; evidence: Evidence }
 export interface Observation {
   taskId: string; status: 'queued' | 'running' | 'generated' | 'failed' | 'cancelled' | 'unknown';
@@ -80,7 +80,7 @@ export class MetasoClient implements VideoClient {
     if (status === 'generated') {
       try { url = publicHttps(t.content?.url ?? ''); } catch { throw new ProviderError('QUERY_CONTRACT', 'Completed task lacks a valid output URL.', { evidence }); }
     }
-    return { taskId, status, rawStatus: /^[a-z0-9_-]+$/iu.test(t.status) ? t.status : 'unrecognized', ...(url ? { url } : {}),
+    return { taskId, status, rawStatus: /^[a-z0-9_-]+$/iu.test(t.status) ? String(redact(t.status, [this.#key])) : 'unrecognized', ...(url ? { url } : {}),
       ...(t.duration ? { duration: t.duration } : {}), ...(t.resolution ? { resolution: t.resolution } : {}), ...(t.ratio ? { ratio: t.ratio } : {}), evidence };
   }
 }

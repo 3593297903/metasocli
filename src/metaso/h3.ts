@@ -59,9 +59,10 @@ export async function buildRequest(root: string, story: Story, segment: StorySeg
   const firstFrame = segment.references.some(r => r.role === 'first_frame');
   const request = validateRequest({ model: 'MiniMax-H3', content, resolution: segment.parameters.resolution, duration: segment.duration,
     ratio: firstFrame ? 'adaptive' : segment.parameters.ratio, context_ir_enabled: segment.parameters.contextIr, aigc_watermark: segment.parameters.watermark });
+  const requestHash = canonicalSha256(request);
   return { request, summary: {
     segmentId: segment.id, sourcePromptHash: segment.promptHash, renderedPrompt: rendered.text, renderedPromptHash: rendered.hash,
-    requestHash: canonicalSha256(request), requestBytes: Buffer.byteLength(JSON.stringify(request)),
+    requestHash, inputHash: canonicalSha256({ requestHash, sourcePromptHash: segment.promptHash, assets }), requestBytes: Buffer.byteLength(JSON.stringify(request)),
     mode: firstFrame ? 'first-frame' as const : assets.length ? 'references' as const : 'text' as const,
     requestedRatio: segment.parameters.ratio, model: request.model, resolution: request.resolution, duration: request.duration,
     effectiveRatio: request.ratio, contextIr: request.context_ir_enabled, watermark: request.aigc_watermark, assets,

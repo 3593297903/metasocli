@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import { writeFile, readFile } from 'node:fs/promises';
+import { writeFile, readFile, unlink } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { cleanup, fixture, imported, png } from './helpers.js';
 import { importStory, loadStory } from '../src/core/project.js';
@@ -31,6 +31,12 @@ it('copies images, preserves ordering, and detects source or material changes', 
   const s = await loadStory(f.root); await writeFile(join(f.root, s.assets[0]!.media!.path), png(512, 512));
   await expect(validatePlan(f.root, plan)).rejects.toMatchObject({ code: 'ASSET_CHANGED' });
   expect((await inspectAssets(f.root))[0]!.status).toBe('changed');
+  await writeFile(image, png());
+  await registerAsset(f.root, 'a', { file: image });
+  expect((await inspectAssets(f.root))[0]!.status).toBe('ready');
+  await unlink(join(f.root, s.assets[0]!.media!.path));
+  await registerAsset(f.root, 'a', { file: image });
+  expect((await inspectAssets(f.root))[0]!.status).toBe('ready');
 });
 it('first-frame mode exposes effective adaptive ratio and rejects mixed references', async () => {
   const f = await fixture(); const image = join(dirname(f.root), 'frame.png'); await writeFile(image, png());
@@ -54,4 +60,8 @@ it('records verified public URL bytes while keeping signed links out of plans', 
   await registerAsset(f.root, 'a', { url: 'https://example.com/a.png?signature=private' }, async () => new Response(png()));
   const plan = await createPlan(f.root, 'ep-1');
   expect(plan.segments[0]!.assets[0]!.transport).toBe('url'); expect(JSON.stringify(plan)).not.toContain('signature');
+  await registerAsset(f.root, 'a', { url: 'https://example.com/a.png?signature=private' }, async () => new Response(png(512, 512)));
+  const changed = await createPlan(f.root, 'ep-1');
+  expect(changed.segments[0]!.requestHash).toBe(plan.segments[0]!.requestHash);
+  expect(changed.segments[0]!.inputHash).not.toBe(plan.segments[0]!.inputHash);
 });

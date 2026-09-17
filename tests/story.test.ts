@@ -18,6 +18,10 @@ it('preserves raw source, normalization, dialogue, ordering and idempotent impor
   expect(await readFile(join(f.root, episode.source.rawPath), 'utf8')).toBe(f.text);
   const again = await importStory(f.root, { ...f.draft, segments: [{ id: 's1', start: 0, end: text.length, duration: 6 }] });
   expect(again.revision).toBe(story.revision);
+  await writeFile(join(f.root, episode.source.rawPath), 'damaged');
+  const restored = await importStory(f.root, { ...f.draft, segments: [{ id: 's1', start: 0, end: text.length, duration: 6 }] });
+  expect(restored.revision).toBe(story.revision + 1);
+  expect(await readFile(join(f.root, episode.source.rawPath), 'utf8')).toBe(f.text);
   expect((await initializeStory(f.root, 'ignored')).projectId).toBe(story.projectId);
 });
 it('rejects missing/reordered spans and finished-prompt rewrites', async () => {
@@ -55,4 +59,9 @@ it('serializes live work and recovers only a provably dead same-host owner', asy
   expect(await withProjectLock(f.root, async () => 42)).toBe(42);
   await writeFile(join(f.root, '.metasocli/project.lock'), '{}');
   await expect(withProjectLock(f.root, async () => 0)).rejects.toMatchObject({ code: 'LOCK_UNKNOWN' });
+});
+it('rejects cyclic asset recipes without committing a partial import', async () => {
+  const f = await fixture();
+  await expect(importStory(f.root, { ...f.draft, recipes: [{ assetId: 'a', kind: 'scene', prompt: 'A', dependencies: ['b'] }, { assetId: 'b', kind: 'prop', prompt: 'B', dependencies: ['a'] }] })).rejects.toMatchObject({ code: 'RECIPE_DEPENDENCY' });
+  expect((await loadStory(f.root)).revision).toBe(0);
 });

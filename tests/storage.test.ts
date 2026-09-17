@@ -16,6 +16,10 @@ it('rejects old roots, old source copies and path traversal before writes', asyn
   const source = await temp();
   await writeFile(join(source, 'package.json'), JSON.stringify({ name: 'story-to-libtv' }));
   await expect(safePath(join(source, 'story'))).rejects.toMatchObject({ code: 'LEGACY_ROOT' });
+  const independent = await temp();
+  for (const skill of ['story-to-libtv', 'video-prompt-to-libtv', 'seedance-segment-prompt-engine', 'story-reference-image-builder']) {
+    await expect(safePath(join(independent, '.codex/skills', skill, 'nested'))).rejects.toMatchObject({ code: 'LEGACY_ROOT' });
+  }
 });
 it('rejects junctions and hardlinks; source copy remains independent', async () => {
   const root = await temp(), outside = await temp();

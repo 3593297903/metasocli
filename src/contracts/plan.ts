@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { Hash, Id, Parameters, Reference } from './story.js';
 export const PlanSegment = z.object({
   segmentId: Id, sourcePromptHash: Hash, renderedPrompt: z.string(), renderedPromptHash: Hash,
-  requestHash: Hash, requestBytes: z.number().int().positive(),
+  requestHash: Hash, inputHash: Hash, requestBytes: z.number().int().positive(),
   mode: z.enum(['text', 'first-frame', 'references']), requestedRatio: Parameters.shape.ratio,
   model: z.literal('MiniMax-H3'), resolution: Parameters.shape.resolution, duration: z.number().int().min(4).max(15),
   effectiveRatio: Parameters.shape.ratio, contextIr: z.boolean(), watermark: z.boolean(),
