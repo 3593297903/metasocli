@@ -1,0 +1,20 @@
+{
+  "name": "metasocli",
+  "version": "0.1.0",
+  "description": "Independent local story and Metaso H3 video task CLI",
+  "type": "module",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": { "node": ">=24.0.0" },
+  "bin": { "metasocli": "dist/cli/main.js" },
+  "exports": { ".": "./dist/core/index.js" },
+  "files": ["dist/", "skills/", "README.md", "docs/", "examples/"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --pool=threads",
+    "check": "npm run build && npm test",
+    "prepack": "npm run build"
+  },
+  "dependencies": { "yaml": "2.9.0", "zod": "4.5.4" },
+  "devDependencies": { "@types/node": "24.10.1", "typescript": "7.0.2", "vitest": "4.1.11" }
+}

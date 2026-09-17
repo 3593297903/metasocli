@@ -1,0 +1,20 @@
+{
+  "version": "0.2.22",
+  "sourceRoot": "E:\\libcli\\.story2libtv-work\\video-prompt-entry-0.2.22-20260916\\source",
+  "files": [
+    {
+      "source": "src/core/canonical.ts",
+      "destinationSha256": "656eedb87746e36cb9282c59638bb4f7cf37f7ed74e228ca5f5887bb985fca6f",
+      "treatment": "Copied unchanged; standalone canonical JSON and SHA-256 only",
+      "sourceSha256": "656eedb87746e36cb9282c59638bb4f7cf37f7ed74e228ca5f5887bb985fca6f",
+      "target": "src/storage/canonical.ts"
+    },
+    {
+      "source": "src/core/file-identity.ts",
+      "destinationSha256": "eb8df7633f2d15eddc4f41e38a816716bad14400c6452e6887e23cad39a560bc",
+      "treatment": "Adapted error import and diagnostic shape; exact identity rules retained",
+      "sourceSha256": "c2fbfb495f8bcea0d9778daee78a5f9413abc68bfa93c7d32d9ef222a2692061",
+      "target": "src/storage/file-identity.ts"
+    }
+  ]
+}
