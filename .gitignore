@@ -1,0 +1,35 @@
+node_modules/
+dist/
+coverage/
+.cache/
+*.tsbuildinfo
+*.log
+
+# Credentials and machine-local settings
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*.json
+secrets*.json
+.local/
+.handoff/
+
+# Real story projects, generated assets and runtime records
+projects/
+workspaces/
+outputs/
+downloads/
+.metasocli/
+.metasocli-runtime/
+.metasocli-install.json
+metasocli.yaml
+.story2libtv/
+.story2libtv-work/
+story2libtv.yaml
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
