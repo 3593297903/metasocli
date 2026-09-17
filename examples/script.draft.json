@@ -1,0 +1,20 @@
+{
+  "episodeId": "ep-script",
+  "kind": "script",
+  "source": "script.txt",
+  "segments": [
+    {
+      "id": "s1",
+      "start": 0,
+      "end": 17,
+      "duration": 8,
+      "prompt": "中景，雨后车站，镜头缓慢推进。\n林舟：我会回来。\n沈禾：我等你。\n停留在两人的视线交换上。",
+      "parameters": {
+        "resolution": "768P",
+        "ratio": "9:16",
+        "contextIr": false,
+        "watermark": false
+      }
+    }
+  ]
+}

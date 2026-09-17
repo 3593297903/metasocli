@@ -1,0 +1,39 @@
+{
+  "episodeId": "ep-refs",
+  "kind": "video-prompts",
+  "source": "references.txt",
+  "segments": [
+    {
+      "id": "s1",
+      "start": 0,
+      "end": 44,
+      "duration": 6,
+      "references": [
+        {
+          "assetId": "hero",
+          "role": "reference_image"
+        },
+        {
+          "assetId": "room",
+          "role": "reference_image"
+        }
+      ]
+    }
+  ],
+  "recipes": [
+    {
+      "assetId": "hero",
+      "kind": "character",
+      "prompt": "生成设定：青年林舟，深蓝外套，黑色短发，半身与全身一致的人物参考图。",
+      "exactText": [],
+      "dependencies": []
+    },
+    {
+      "assetId": "room",
+      "kind": "scene",
+      "prompt": "生成设定：雨后候车室，灰蓝墙面、木制座椅、窗外雨痕，空场参考图。",
+      "exactText": [],
+      "dependencies": []
+    }
+  ]
+}
