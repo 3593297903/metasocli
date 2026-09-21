@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "operationId": "e143e99e-c06c-40d4-af8c-07f4dd553b5f",
+  "projectId": "c730b362-dac8-4676-8c3a-17e227483730",
+  "planId": "b711b04b-3c84-47bd-8aab-ba1fdc47ffe5",
+  "planHash": "e48bdff99dff04a6c31dadb18a10a42963c94ffdaab46fa07913bf0476f721d2",
+  "episodeId": "ep-normal",
+  "segmentId": "s1",
+  "revision": 1,
+  "requestHash": "3dc7dabde1a297084ec6c12dc65e120536a248dbb843770b063329439b855edc",
+  "inputHash": "8db5b63fde51e80eb597449d6f08badbcfd67e6fc4d8cc22f83d1e1da0e679a1",
+  "attempt": 1,
+  "status": "queued",
+  "createdAt": "2026-09-19T06:29:47.934Z",
+  "updatedAt": "2026-09-19T06:29:47.998Z",
+  "submittedAt": "2026-09-19T06:29:47.954Z",
+  "taskId": "pre-ir-normal",
+  "evidencePath": ".metasocli/receipts/e143e99e-c06c-40d4-af8c-07f4dd553b5f-evidence-aba1532d-bb2a-421e-8007-60b99a82e521.json"
+}

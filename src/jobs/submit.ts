@@ -6,8 +6,11 @@ import { loadPlan, validatePlan } from '../core/planning.js';
 import { withProjectLock } from '../storage/locking.js';
 import { sha256Hex } from '../storage/canonical.js';
 import { ProviderError, type VideoClient, type Submission } from '../metaso/client.js';
-import { fetchImage, type Fetch } from '../metaso/transport.js';
+import { fetchMedia, type Fetch } from '../metaso/transport.js';
+import { MAX_AUDIO_BYTES } from '../assets/audio.js';
+import { MAX_IMAGE_BYTES } from '../assets/image.js';
 import { listJobs, persistence, saveEvidence, type Persistence } from './store.js';
+import { assertTaskIdAvailable, checkSubmissionConflicts, operationKind } from './submission-guard.js';
 
 export interface JobDependencies { client: VideoClient; fetcher?: Fetch; persistence?: Persistence; sleep?: (ms: number) => Promise<void> }
 export async function submit(root: string, planId: string, segmentId: string, authorized: boolean, deps: JobDependencies, retryOf?: string): Promise<Job> {
@@ -16,6 +19,7 @@ export async function submit(root: string, planId: string, segmentId: string, au
   const disk = deps.persistence ?? persistence;
   return withProjectLock(root, async assertOwned => {
     const plan = await loadPlan(root, planId), segment = plan.segments.find(s => s.segmentId === segmentId);
+    if (plan.workflow?.stage === 'prepare') fail('IR_PREPARE_NOT_VIDEO', 'This is an IR preparation plan. Use context-ir --plan <id> --segment <id> --confirm, then review and derive a video plan.');
     if (!segment) fail('SEGMENT_MISSING', 'Segment is absent from the chosen plan.');
     const jobs = await listJobs(root);
     const related = jobs.filter(j => j.episodeId === plan.episodeId && j.segmentId === segmentId);
@@ -25,10 +29,12 @@ export async function submit(root: string, planId: string, segmentId: string, au
       const repeatedRetry = jobs.find(j => j.retryOf === retryOf);
       if (repeatedRetry) {
         if (repeatedRetry.inputHash !== segment.inputHash || !related.includes(repeatedRetry)) fail('RETRY_CONFLICT', 'Retry belongs to a different request.');
+        await operationKind(root, repeatedRetry.operationId);
         return repeatedRetry;
       }
       if (!previous || previous.operationId !== retryOf || !['failed', 'cancelled'].includes(previous.status)) fail('RETRY_FORBIDDEN', 'Only the latest definitively failed or cancelled attempt can be explicitly regenerated.');
-    } else if (previous && previous.status !== 'prepared') return previous;
+    } else if (previous && previous.status !== 'prepared') { await operationKind(root, previous.operationId); return previous; }
+    await checkSubmissionConflicts(root, plan.episodeId, segmentId);
     if (jobs.some(j => j.status === 'submit_unknown')) fail('SUBMIT_UNKNOWN', 'An earlier creation has an unknown result. Recover its task ID before any new generation.');
     if (related.some(j => !['failed', 'cancelled', 'downloaded', 'prepared'].includes(j.status))) fail('JOB_ACTIVE', 'This segment already has an unfinished task; resume it.');
     const { story, built } = await validatePlan(root, plan);
@@ -36,7 +42,7 @@ export async function submit(root: string, planId: string, segmentId: string, au
     // Public URLs are mutable; compare current remote bytes before committing paid intent.
     for (const ref of selected.summary.assets.filter(a => a.transport === 'url')) {
       const media = story.assets.find(a => a.recipe.assetId === ref.assetId)!.media!;
-      if (sha256Hex(await fetchImage(media.url!, deps.fetcher)) !== ref.sha256) fail('REMOTE_ASSET_CHANGED', 'Public reference bytes changed; re-register and replan.');
+      if (sha256Hex(await fetchMedia(media.url!, ref.role === 'reference_audio' ? MAX_AUDIO_BYTES : MAX_IMAGE_BYTES, deps.fetcher)) !== ref.sha256) fail('REMOTE_ASSET_CHANGED', 'Public reference bytes changed; re-register and replan.');
     }
     const now = new Date().toISOString();
     const job: Job = !retryOf && previous?.status === 'prepared' ? previous : {
@@ -45,6 +51,7 @@ export async function submit(root: string, planId: string, segmentId: string, au
       attempt: (previous?.attempt ?? 0) + 1, ...(retryOf ? { retryOf } : {}), status: 'prepared', createdAt: now, updatedAt: now,
     };
     await disk.job(root, job);
+    await operationKind(root, job.operationId);
     job.status = 'submitting'; job.submittedAt = new Date().toISOString(); job.updatedAt = job.submittedAt;
     await disk.job(root, job); // Must durably precede the ONE create call.
     await assertOwned();
@@ -61,6 +68,7 @@ export async function submit(root: string, planId: string, segmentId: string, au
       return job;
     }
     try {
+      await assertTaskIdAvailable(root, receipt.taskId, job.operationId);
       await disk.receipt(root, { operationId: job.operationId, requestHash: job.requestHash, taskId: receipt.taskId, receivedAt: new Date().toISOString(), recoveredManually: false });
       job.taskId = receipt.taskId; job.status = 'queued'; job.updatedAt = new Date().toISOString();
       await disk.job(root, job);

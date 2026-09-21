@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "operationId": "04404fd4-49d0-4a85-b864-709653c94244",
+  "projectId": "cae3541c-c3d1-4529-aa95-6fcf8953d71d",
+  "planId": "9de1f3f8-e638-4f9a-bc2d-05203c4c2748",
+  "planHash": "42ca9ca6288d697672bd4845b25b1be7d4a7c4f254bc6b2e371910695606a22a",
+  "episodeId": "ep-narration",
+  "segmentId": "s1",
+  "revision": 2,
+  "requestHash": "62082e91992790ef8278f824069e964659dd9ba8efd1dbf5bab46b23fb44a605",
+  "inputHash": "1ca2e6878106bdec490d0bbb82574f0153f1616af3b07217edc5830d4f6f4ad8",
+  "attempt": 1,
+  "status": "queued",
+  "createdAt": "2026-09-19T06:29:48.198Z",
+  "updatedAt": "2026-09-19T06:29:48.276Z",
+  "submittedAt": "2026-09-19T06:29:48.235Z",
+  "taskId": "pre-ir-narration",
+  "evidencePath": ".metasocli/receipts/04404fd4-49d0-4a85-b864-709653c94244-evidence-42b257a3-4f9b-4a29-87fb-c178ca7f6068.json"
+}

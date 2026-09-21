@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "planId": "9de1f3f8-e638-4f9a-bc2d-05203c4c2748",
+  "planHash": "42ca9ca6288d697672bd4845b25b1be7d4a7c4f254bc6b2e371910695606a22a",
+  "projectId": "cae3541c-c3d1-4529-aa95-6fcf8953d71d",
+  "episodeId": "ep-narration",
+  "revision": 2,
+  "manifestHash": "ed672370b49fff50a82a790a3a58274c988d48ff52ef95068034c22ad45b8162",
+  "createdAt": "2026-09-19T06:12:09.065Z",
+  "segments": [
+    {
+      "segmentId": "s1",
+      "sourcePromptHash": "9f860203c5e6a57b2d16c82166b5f314ee7881bbbe5f66f571fc3a6ef988f6f0",
+      "renderedPrompt": "旁白：旧整数旁白段。\n\n\n旁白配音参考（技术适配说明，不改写以上原文）\n本次输入的参考音频1仅作为画外旁白的音色、咬字、语气、节奏和情绪参考。不得照搬参考音频中的具体台词或剧情，也不是把整条音频铺到整段视频。\n仅以下原文片段中的叙述性画外旁白使用该声线，按其所在镜头和时间位置演绎；片段列表只用于标注归属，不重复朗读。原文未指定时间时不虚构时码。\n- \"旧整数旁白段。\"\n人物直接对白仍按对应角色的声线和原文口型要求演绎，不得被旁白音频替代；画外旁白不得驱动无口型人物张嘴。纯对白、环境声、音乐和静默部分不使用旁白声线。完整台词、原有顺序及本段时长保持不变。",
+      "renderedPromptHash": "35a4d3524e3551447bf4382e62100abf5f9b25cb12a2bab5bea3bc3adc10ca69",
+      "requestHash": "62082e91992790ef8278f824069e964659dd9ba8efd1dbf5bab46b23fb44a605",
+      "inputHash": "1ca2e6878106bdec490d0bbb82574f0153f1616af3b07217edc5830d4f6f4ad8",
+      "requestBytes": 43799,
+      "mode": "references",
+      "requestedRatio": "9:16",
+      "model": "MiniMax-H3",
+      "resolution": "768P",
+      "duration": 6,
+      "effectiveRatio": "9:16",
+      "contextIr": false,
+      "watermark": false,
+      "assets": [
+        {
+          "assetId": "narrator",
+          "role": "reference_audio",
+          "sha256": "78f82cd49af869013e8ec414a15d71f5f4f2ec8d006b6a0c50527c91eaa7a85f",
+          "recipeHash": "a4cd12de388266a8a4a8fa695397e7b9155755b4b153897e53e7ff617575c089",
+          "transport": "data",
+          "duration": 2
+        }
+      ],
+      "narration": {
+        "assetId": "narrator",
+        "cues": [
+          {
+            "start": 3,
+            "end": 10
+          }
+        ]
+      }
+    }
+  ]
+}

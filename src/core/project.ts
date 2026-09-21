@@ -9,6 +9,8 @@ import { atomicWrite, readStable } from '../storage/io.js';
 import { canonicalSha256, sha256Hex } from '../storage/canonical.js';
 import { withProjectLock } from '../storage/locking.js';
 import { normalizeText, validateCoverage } from '../story/text.js';
+import { validateNarration } from '../story/narration.js';
+import { normalizeTargetDurationSeconds } from '../story/duration.js';
 
 export async function loadStory(input: string): Promise<Story> {
   const root = await safePath(input);
@@ -24,6 +26,8 @@ export async function loadStory(input: string): Promise<Story> {
   for (const asset of story.assets) {
     if (canonicalSha256(asset.recipe) !== asset.recipeHash) fail('CONTENT_CHANGED', 'Asset recipe hash mismatch.');
     if (asset.media && ((asset.media.transport === 'url') !== (asset.media.url !== undefined))) fail('INVALID_MANIFEST', 'URL transport requires a verified URL.');
+    if (asset.media && ((asset.recipe.kind === 'narration') !== ('duration' in asset.media)
+      || (asset.recipe.kind === 'narration' && asset.media.provenance !== 'user'))) fail('ASSET_ROLE', 'Narration audio and image assets have incompatible media roles.');
   }
   return story;
 }
@@ -56,12 +60,14 @@ export async function importStory(root: string, value: unknown, replace = false)
     id: draft.episodeId, kind: draft.kind,
     source: { origin: basename(draft.source), rawPath: `.metasocli/sources/${rawHash}.bin`, rawHash, textPath: `.metasocli/sources/${textHash}.txt`, textHash },
     segments: draft.segments.map(s => {
+      const normalizedDuration = normalizeTargetDurationSeconds(s.duration, `Segment ${s.id} duration`);
       const original = text.slice(s.start, s.end);
       const prompt = s.prompt === undefined ? original : normalizeText(s.prompt);
       if (draft.kind === 'video-prompts' && prompt !== original) fail('PROMPT_CHANGED', `Finished prompt ${s.id} must match its complete source span.`);
       if (draft.kind === 'script' && !prompt.includes(original)) fail('DIALOGUE_CHANGED', `Script prompt ${s.id} must include its complete source span verbatim.`);
       if (new Set(s.references.map(r => r.assetId)).size !== s.references.length) fail('DUPLICATE_REFERENCE', `Segment ${s.id} repeats an asset.`);
-      return { ...s, prompt, promptHash: sha256Hex(prompt) };
+      validateNarration({ ...s, prompt });
+      return { ...s, ...normalizedDuration, prompt, promptHash: sha256Hex(prompt) };
     }),
   });
   return withProjectLock(root, async () => {
@@ -76,6 +82,8 @@ export async function importStory(root: string, value: unknown, replace = false)
       if (!previousAsset) nextAssets.push({ recipe, recipeHash, media: null });
     }
     for (const asset of nextAssets) {
+      if (asset.recipe.kind === 'narration' && (asset.recipe.dependencies.length || asset.recipe.exactText.length)) fail('RECIPE_DEPENDENCY', 'Narration is an existing voice reference, not an image generation recipe.');
+      if (asset.recipe.dependencies.some(id => nextAssets.find(a => a.recipe.assetId === id)?.recipe.kind === 'narration')) fail('RECIPE_DEPENDENCY', 'Image recipes cannot depend on narration audio.');
       if (new Set(asset.recipe.dependencies).size !== asset.recipe.dependencies.length || asset.recipe.dependencies.some(id => !nextAssets.some(a => a.recipe.assetId === id) || id === asset.recipe.assetId)) fail('RECIPE_DEPENDENCY', 'Recipe dependencies must uniquely reference other declared assets.');
     }
     const visited = new Set<string>(), active = new Set<string>();
@@ -86,8 +94,13 @@ export async function importStory(root: string, value: unknown, replace = false)
       active.delete(id); visited.add(id);
     };
     for (const asset of nextAssets) visit(asset.recipe.assetId);
-    for (const s of episode.segments) for (const ref of s.references) {
-      if (!nextAssets.some(a => a.recipe.assetId === ref.assetId)) fail('MISSING_RECIPE', `Missing recipe for ${ref.assetId}.`);
+    for (const s of episode.segments) {
+      for (const ref of s.references) {
+        const asset = nextAssets.find(a => a.recipe.assetId === ref.assetId);
+        if (!asset) fail('MISSING_RECIPE', `Missing recipe for ${ref.assetId}.`);
+        if (asset.recipe.kind === 'narration') fail('ASSET_ROLE', 'Use the narration field to bind audio; image references keep their original order.');
+      }
+      if (s.narration && nextAssets.find(a => a.recipe.assetId === s.narration!.assetId)?.recipe.kind !== 'narration') fail('MISSING_RECIPE', `Declare a narration recipe for segment ${s.id}.`);
     }
     const episodes = previous ? story.episodes.map(e => e.id === episode.id ? episode : e) : [...story.episodes, episode];
     if (canonicalSha256({ episodes, assets: nextAssets }) === canonicalSha256({ episodes: story.episodes, assets: story.assets })) {

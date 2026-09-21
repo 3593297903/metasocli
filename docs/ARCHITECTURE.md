@@ -1,6 +1,10 @@
 # metasocli 独立项目方案
 
+2026-09-21 当前默认改为 [视频请求内启用 Context IR](INLINE_CONTEXT_IR_WORKFLOW.md)：新计划使用 `h3-inline-ir / inline-video`，实际视频 JSON 显式发送 `context_ir_enabled:true`，不先执行独立 IR。CLI 在联网前拒绝 false 计划创建视频；已有任务按原 ID 恢复。下文 2026-09-19 的两阶段设计作为历史兼容记录保留。
+
 日期：2026-09-17。本文保留独立项目的初始设计；0.1.0 离线实现与实际命令现已交付，见 [README](../README.md) 和 [验证记录](VERIFICATION.md)。真实接口验收尚未完成。命名与边界以仓库 AGENTS.md 为准。
+
+2026-09-19 实施补充：现有时长、参考图和单旁白能力之上已加入 [独立 Context IR 流程](CONTEXT_IR_WORKFLOW.md)。Plan 的无默认值可选 workflow 区分准备与单段视频派生；原 Story 和视频 Job 格式保留。独立 IR 记录/回执/原始文本/review 位于 `.metasocli/context-ir/`，通过父计划和结果哈希连接；提交前重建派生请求，最终内联 IR 为 false。各阶段各自持项目锁，锁内检查两类任务冲突，普通恢复不创建下一阶段。未增加依赖、数据库或后台服务。以下早期设计中的“拟定”状态以 README 的已实现命令为准。
 
 ## 决策
 

@@ -2,6 +2,12 @@
 
 第一版 0.1.0 已实现，离线使用与命令见 [README](README.md)，验收记录见 [docs/VERIFICATION.md](docs/VERIFICATION.md)。下面保留最初的开发交接说明，后续任务应先检查当前实现与测试，不必重复初始化。
 
+直接制作视频时，在 `E:\metasocli` 的本地任务中使用 `$metasocli-video-prompts`（成品提示词）或 `$metasocli`（剧本），附上输入并指定故事目录与生成范围。需要沿用已配置的统一旁白声线时，使用独立的 `$metasocli-video-prompts-旁白`。项目技能由 `.agents/skills/` 加载；详细示例见 [README 的 Skill 用法](README.md#在-codex-中使用-skill)。
+
+本机已经用户授权，将 `$metasocli-video-prompts` 和 `$metasocli-video-prompts-旁白` 两个入口另外安装到用户级 Skill 目录，因此可在 `mttest1` 等其他项目调用。两个入口仍读取本项目正文并使用本机程序；原 Skill、旧 CLI 及全局配置文件不被覆盖。2026-09-21 起三个入口默认使用 `plan --workflow h3-inline-ir`，完成素材与离线计划后停在视频提交前。用户授权当前范围及包含 IR 的视频模式后直接 generate；真实视频请求明确带 `context_ir_enabled:true`，不先单独创建 IR。已授权范围不逐段再问。见 [当前流程](docs/INLINE_CONTEXT_IR_WORKFLOW.md)。本次切换仅做离线验证，不发起付费生成。
+
+两个入口会自动调用本包 `$metasocli-reference-images`。现已带入完整人物/场景/道具/首帧模板，先形成并校验完整配方，导入后只为缺失必需素材原样调用宿主生图，再正式登记。无需在新视频任务中单独再调用图片 Skill；现有故事和图片不会因模板更新自动被改写。
+
 在 Codex 左侧选择 `metasocli`，新建一个聊天/任务，选择直接使用 `E:\metasocli` 的本地模式。新任务会获得这个项目的工作目录与上下文。可将下面的消息作为开场：
 
 ```text

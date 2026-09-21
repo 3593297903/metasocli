@@ -1,0 +1,30 @@
+schemaVersion: 1
+owner: metasocli
+projectId: c730b362-dac8-4676-8c3a-17e227483730
+name: legacy integer normal
+revision: 1
+episodes:
+  - id: ep-normal
+    kind: video-prompts
+    source:
+      origin: normal.txt
+      rawPath: .metasocli/sources/045bc567b11d4f7881f3681902b896acea3bfd05544ba03dfe87d40642e9bf10.bin
+      rawHash: 045bc567b11d4f7881f3681902b896acea3bfd05544ba03dfe87d40642e9bf10
+      textPath: .metasocli/sources/045bc567b11d4f7881f3681902b896acea3bfd05544ba03dfe87d40642e9bf10.txt
+      textHash: 045bc567b11d4f7881f3681902b896acea3bfd05544ba03dfe87d40642e9bf10
+    segments:
+      - id: s1
+        start: 0
+        end: 8
+        duration: 6
+        prompt: |
+          旧整数普通段。
+        promptHash: 045bc567b11d4f7881f3681902b896acea3bfd05544ba03dfe87d40642e9bf10
+        references: []
+        parameters:
+          model: MiniMax-H3
+          resolution: 768P
+          ratio: 9:16
+          contextIr: false
+          watermark: false
+assets: []

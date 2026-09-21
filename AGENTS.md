@@ -30,7 +30,7 @@
 - 安装 owner：`metasocli`
 - 安装回执：`.metasocli-install.json`
 - 可选 MCP 注册前缀：`metasocli-`
-- Skill：`metasocli`、`metasocli-video-prompts`、`metasocli-prompt-engine`、`metasocli-reference-images`
+- Skill：`metasocli`、`metasocli-video-prompts`、`metasocli-prompt-engine`、`metasocli-reference-images`；用户新增的独立旁白入口为 `metasocli-video-prompts-旁白`，原入口不自动启用旁白音频。
 - 独立凭据变量：`METASO_API_KEY`
 
 开发期使用本地构建入口。安装器如需存在，先在临时目录测试归属、覆盖、升级和卸载边界。初始化必须拒绝旧故事根和旧源码根，验证路径真实位置与目录联接。导入旧内容是明确的单向复制，不在原地迁移。

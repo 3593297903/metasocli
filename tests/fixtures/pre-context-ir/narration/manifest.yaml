@@ -1,0 +1,52 @@
+schemaVersion: 1
+owner: metasocli
+projectId: cae3541c-c3d1-4529-aa95-6fcf8953d71d
+name: legacy integer narration
+revision: 2
+episodes:
+  - id: ep-narration
+    kind: video-prompts
+    source:
+      origin: narration.txt
+      rawPath: .metasocli/sources/9f860203c5e6a57b2d16c82166b5f314ee7881bbbe5f66f571fc3a6ef988f6f0.bin
+      rawHash: 9f860203c5e6a57b2d16c82166b5f314ee7881bbbe5f66f571fc3a6ef988f6f0
+      textPath: .metasocli/sources/9f860203c5e6a57b2d16c82166b5f314ee7881bbbe5f66f571fc3a6ef988f6f0.txt
+      textHash: 9f860203c5e6a57b2d16c82166b5f314ee7881bbbe5f66f571fc3a6ef988f6f0
+    segments:
+      - id: s1
+        start: 0
+        end: 11
+        duration: 6
+        prompt: |
+          旁白：旧整数旁白段。
+        promptHash: 9f860203c5e6a57b2d16c82166b5f314ee7881bbbe5f66f571fc3a6ef988f6f0
+        references: []
+        parameters:
+          model: MiniMax-H3
+          resolution: 768P
+          ratio: 9:16
+          contextIr: false
+          watermark: false
+        narration:
+          assetId: narrator
+          cues:
+            - start: 3
+              end: 10
+assets:
+  - recipe:
+      assetId: narrator
+      kind: narration
+      prompt: 旧整数旁白声线参考
+      exactText: []
+      dependencies: []
+    recipeHash: a4cd12de388266a8a4a8fa695397e7b9155755b4b153897e53e7ff617575c089
+    media:
+      path: assets/narrator/78f82cd49af869013e8ec414a15d71f5f4f2ec8d006b6a0c50527c91eaa7a85f.wav
+      sha256: 78f82cd49af869013e8ec414a15d71f5f4f2ec8d006b6a0c50527c91eaa7a85f
+      bytes: 32044
+      provenance: user
+      transport: data
+      mime: audio/wav
+      duration: 2
+      sampleRate: 8000
+      channels: 1

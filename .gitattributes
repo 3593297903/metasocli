@@ -7,3 +7,7 @@
 *.yaml text eol=lf
 *.yml text eol=lf
 *.ps1 text eol=crlf
+
+# Preserve captured hashes and the bytes of copied reference templates.
+tests/fixtures/** -text
+skills/metasocli-reference-images/references/*.md -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

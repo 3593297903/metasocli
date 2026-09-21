@@ -13,6 +13,7 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --pool=threads",
     "test:process": "node scripts/process-smoke.mjs",
+    "test:image-skill": "python -X utf8 -B tests/reference_image_skill_test.py",
     "check": "npm run build && npm test",
     "prepack": "npm run build"
   },

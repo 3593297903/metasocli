@@ -1,6 +1,7 @@
 import { fail } from '../core/errors.js';
 import { sha256Hex } from '../storage/canonical.js';
 import type { StorySegment } from '../contracts/story.js';
+import { narrationDirection } from './narration.js';
 
 /** Only BOM and newline normalization; spaces and terminal newlines are significant. */
 export function normalizeText(input: Uint8Array | string): string {
@@ -31,7 +32,7 @@ export function renderPrompt(segment: StorySegment): { text: string; hash: strin
     const label = bindings.get(id);
     if (!label) fail('UNKNOWN_REFERENCE', `Segment ${segment.id} contains an unbound reference.`);
     return label;
-  });
+  }) + narrationDirection(segment);
   if (/\{\{ref:/u.test(text)) fail('UNKNOWN_REFERENCE', `Segment ${segment.id} has an incomplete reference marker.`);
   // Natural ordinal labels refer to the explicit content array order; no provider token is invented.
   if ([...text].length > 7000 || text.trim().length === 0) fail('PROMPT_LIMIT', `Segment ${segment.id} must have 1–7000 H3 prompt characters; source was not truncated.`);

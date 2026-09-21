@@ -34,7 +34,20 @@ try {
   $tarball = Join-Path $sourceRoot $pack.filename
   if ($pack.files.path | Where-Object { $_ -match '(^|/)(\.work|node_modules|\.metasocli|\.env)(/|$)' }) { throw 'Private/development files included in package' }
   $skillFiles = @($pack.files.path | Where-Object { $_ -match '^skills/[^/]+/SKILL.md$' })
-  if ($skillFiles.Count -ne 4) { throw 'Expected exactly four new bundled Skills' }
+  # Keep the isolated Windows PowerShell 5.1 run independent of the source-file code page.
+  $narrationSkill = 'metasocli-video-prompts-' + [string][char]0x65C1 + [string][char]0x767D
+  $expectedSkills = @('metasocli','metasocli-video-prompts',$narrationSkill,'metasocli-prompt-engine','metasocli-reference-images')
+  if ($skillFiles.Count -ne $expectedSkills.Count) { throw 'Expected exactly five independent bundled Skills' }
+  foreach ($skill in $expectedSkills) {
+    if ($pack.files.path -notcontains "skills/$skill/SKILL.md") { throw "Missing bundled Skill: $skill" }
+  }
+  foreach ($reference in @('character-board.md','scene-board.md','prop-board.md','first-frame.md','shared-visual-policy.md','handoff-contract.md')) {
+    if ($pack.files.path -notcontains "skills/metasocli-reference-images/references/$reference") { throw "Missing image Skill template/contract: $reference" }
+  }
+  if ($pack.files.path -notcontains 'skills/metasocli-reference-images/scripts/validate_handoff.py') { throw 'Missing image Skill handoff validator' }
+  foreach ($file in @('docs/CONTEXT_IR_WORKFLOW.md','dist/jobs/context-ir.js','dist/contracts/context-ir.js')) {
+    if ($pack.files.path -notcontains $file) { throw "Missing independent IR package resource: $file" }
+  }
   $sentinels = @('story2libtv.cmd','node_modules/story-to-libtv/package.json','.codex/config.toml','.story2libtv-runtime/owner.json')
   foreach ($skill in @('story-to-libtv','video-prompt-to-libtv','seedance-segment-prompt-engine','story-reference-image-builder')) { $sentinels += ".codex/skills/$skill/SKILL.md" }
   $hashes = @{}

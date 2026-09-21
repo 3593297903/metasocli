@@ -1,0 +1,27 @@
+{
+  "generatedBy": "pre-Context-IR source snapshot compiled independently before test fixtures; synthetic source/media/fake video task only",
+  "records": [
+    {
+      "name": "normal",
+      "planId": "b711b04b-3c84-47bd-8aab-ba1fdc47ffe5",
+      "planHash": "e48bdff99dff04a6c31dadb18a10a42963c94ffdaab46fa07913bf0476f721d2",
+      "inputHash": "8db5b63fde51e80eb597449d6f08badbcfd67e6fc4d8cc22f83d1e1da0e679a1",
+      "requestHash": "3dc7dabde1a297084ec6c12dc65e120536a248dbb843770b063329439b855edc",
+      "planFileHash": "acc60d58bc08bc3d0dfffa255bf860313b10ba955da6649020c54e1fcda7ada3",
+      "manifestFileHash": "09b02cd48ab4123209660884bca3b913ea225a611275c3fbae4e4be4c9bbae48",
+      "operationId": "e143e99e-c06c-40d4-af8c-07f4dd553b5f",
+      "taskId": "pre-ir-normal"
+    },
+    {
+      "name": "narration",
+      "planId": "9de1f3f8-e638-4f9a-bc2d-05203c4c2748",
+      "planHash": "42ca9ca6288d697672bd4845b25b1be7d4a7c4f254bc6b2e371910695606a22a",
+      "inputHash": "1ca2e6878106bdec490d0bbb82574f0153f1616af3b07217edc5830d4f6f4ad8",
+      "requestHash": "62082e91992790ef8278f824069e964659dd9ba8efd1dbf5bab46b23fb44a605",
+      "planFileHash": "c5ae64e080c9cfdd84e156d8b8280cd579c2de70b5761d84fe9f03036c85b4f7",
+      "manifestFileHash": "c3d605df89c4a7516d35198f5c9f38906534a978774fa3539c1c6c074fb10e88",
+      "operationId": "04404fd4-49d0-4a85-b864-709653c94244",
+      "taskId": "pre-ir-narration"
+    }
+  ]
+}

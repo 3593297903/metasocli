@@ -15,6 +15,69 @@
       "treatment": "Adapted error import and diagnostic shape; exact identity rules retained",
       "sourceSha256": "c2fbfb495f8bcea0d9778daee78a5f9413abc68bfa93c7d32d9ef222a2692061",
       "target": "src/storage/file-identity.ts"
+    },
+    {
+      "source": "skills/story-reference-image-builder/SKILL.md",
+      "target": "skills/metasocli-reference-images/SKILL.md",
+      "treatment": "Adapted two-phase image workflow to metasocli imports/registration and native image generation; no legacy CLI fallback or runtime dependencies.",
+      "sourceSha256": "f439cb16cb70833c1c076485145fe559bfc108847d0684a904e196f27c516db4",
+      "destinationSha256": "1d740b87522aeeb1d52324009e80636117752168559a90dfa31a599f498ea377"
+    },
+    {
+      "source": "skills/story-reference-image-builder/references/character-board.md",
+      "target": "skills/metasocli-reference-images/references/character-board.md",
+      "treatment": "Copied unchanged: full character turnaround board template.",
+      "sourceSha256": "b92a3b0324764828341176961d8ddfb330f8c54a2519e379529e4cf7e5d7b45c",
+      "destinationSha256": "b92a3b0324764828341176961d8ddfb330f8c54a2519e379529e4cf7e5d7b45c"
+    },
+    {
+      "source": "skills/story-reference-image-builder/references/scene-board.md",
+      "target": "skills/metasocli-reference-images/references/scene-board.md",
+      "treatment": "Copied unchanged: full scene spatial design board template.",
+      "sourceSha256": "b96cddd57ce70e5fae3e921e490ad8dc840ac4ef764e16713eb31bc3beaf4505",
+      "destinationSha256": "b96cddd57ce70e5fae3e921e490ad8dc840ac4ef764e16713eb31bc3beaf4505"
+    },
+    {
+      "source": "skills/story-reference-image-builder/references/prop-board.md",
+      "target": "skills/metasocli-reference-images/references/prop-board.md",
+      "treatment": "Copied unchanged: full prop structural/material design board template.",
+      "sourceSha256": "32ada69ef2dd4394d9f6a617ca91196af98ede1db2aa252170a951aedfb2f352",
+      "destinationSha256": "32ada69ef2dd4394d9f6a617ca91196af98ede1db2aa252170a951aedfb2f352"
+    },
+    {
+      "source": "skills/story-reference-image-builder/references/shared-visual-policy.md",
+      "target": "skills/metasocli-reference-images/references/shared-visual-policy.md",
+      "treatment": "Copied unchanged: story fidelity, first output and technical checks without visual QA.",
+      "sourceSha256": "f29dd8a738309c1c1549b6565ba22f7f56c5f18f25891ebb962d6c491e359109",
+      "destinationSha256": "f29dd8a738309c1c1549b6565ba22f7f56c5f18f25891ebb962d6c491e359109"
+    },
+    {
+      "source": "skills/story-reference-image-builder/references/first-frame.md",
+      "target": "skills/metasocli-reference-images/references/first-frame.md",
+      "treatment": "Adapted H3 adaptive first-frame ratio and incompatible audio/reference inputs; retained complete frame composition.",
+      "sourceSha256": "9e0965559ca226d15fbf794ea503ca97a11067e5660e09923e675d0f38fc63f9",
+      "destinationSha256": "574404c448edcf7d2ae3ac9f139c786f0d33f21e1532c305b63d30adc6f18fcd"
+    },
+    {
+      "source": "skills/story-reference-image-builder/references/handoff-contract.md",
+      "target": "skills/metasocli-reference-images/references/handoff-contract.md",
+      "treatment": "Adapted flat IDs, native-only generation, metasocli staging and exact ImportDraft mapping; excluded legacy state/QA records.",
+      "sourceSha256": "8c6ea4a6a0de97fea9b2b65cce62274d14c73da1daaad9f26c5126972e4139a6",
+      "destinationSha256": "79e0bffaa3be60c6d7da6814445a52fba088f6a47f866afdb27f4c85963af429"
+    },
+    {
+      "source": "skills/story-reference-image-builder/scripts/validate_handoff.py",
+      "target": "skills/metasocli-reference-images/scripts/validate_handoff.py",
+      "treatment": "Adapted flat IDs and state namespace; added draft allocation/full-prompt transfer checks and stricter reuse identity; standard library only.",
+      "sourceSha256": "9edf845a6dddadd0fb11ac706c65724deefb8025bc8ae170252ac80cc7ffd700",
+      "destinationSha256": "171e46a6d06314be0bc6db17790c30414caf7f8bfda747a8ef7c93313a918f19"
+    },
+    {
+      "source": "src/core/prompt.ts",
+      "target": "src/story/duration.ts",
+      "treatment": "Behavioral basis only: independently implemented finite-positive target validation and Math.ceil into an executable 4–15 second duration; no old Core import or copied Seedance contract.",
+      "sourceSha256": "0727bb68435c9cca87965dc8d5cc7dda7a97d6d9e2e8cde6a5066a323c576f5d",
+      "destinationSha256": "7cdbfee74205a35e3f8fb6807fb21d55641acf2e179e3e222acc6410564f4846"
     }
   ]
 }

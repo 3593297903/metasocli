@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "planId": "b711b04b-3c84-47bd-8aab-ba1fdc47ffe5",
+  "planHash": "e48bdff99dff04a6c31dadb18a10a42963c94ffdaab46fa07913bf0476f721d2",
+  "projectId": "c730b362-dac8-4676-8c3a-17e227483730",
+  "episodeId": "ep-normal",
+  "revision": 1,
+  "manifestHash": "4e44441ea75a06e6917c0f8b5dd899c5cf35e500734c5d7a00d54b25f6cfba41",
+  "createdAt": "2026-09-19T06:12:08.799Z",
+  "segments": [
+    {
+      "segmentId": "s1",
+      "sourcePromptHash": "045bc567b11d4f7881f3681902b896acea3bfd05544ba03dfe87d40642e9bf10",
+      "renderedPrompt": "旧整数普通段。\n",
+      "renderedPromptHash": "045bc567b11d4f7881f3681902b896acea3bfd05544ba03dfe87d40642e9bf10",
+      "requestHash": "3dc7dabde1a297084ec6c12dc65e120536a248dbb843770b063329439b855edc",
+      "inputHash": "8db5b63fde51e80eb597449d6f08badbcfd67e6fc4d8cc22f83d1e1da0e679a1",
+      "requestBytes": 181,
+      "mode": "text",
+      "requestedRatio": "9:16",
+      "model": "MiniMax-H3",
+      "resolution": "768P",
+      "duration": 6,
+      "effectiveRatio": "9:16",
+      "contextIr": false,
+      "watermark": false,
+      "assets": []
+    }
+  ]
+}

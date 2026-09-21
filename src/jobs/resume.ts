@@ -8,6 +8,7 @@ import { ProviderError, TaskId, type Observation, type VideoClient } from '../me
 import { listJobs, persistence, readJob, saveEvidence } from './store.js';
 import type { JobDependencies } from './submit.js';
 import { downloadVideo, reconcileOutput } from './video.js';
+import { operationKind, assertTaskIdAvailable } from './submission-guard.js';
 
 const Options = z.object({
   maxPolls: z.number().int().min(1).max(720).default(60), pollIntervalMs: z.number().int().min(0).max(60000).default(5000),
@@ -32,6 +33,7 @@ async function queryWithRetry(client: VideoClient, taskId: string, options: Opti
 export async function resume(root: string, operationId: string, deps: JobDependencies, input: Partial<Options> = {}): Promise<Job> {
   const options = parse(Options, input), disk = deps.persistence ?? persistence, sleep = deps.sleep ?? delay;
   return withProjectLock(root, async assertOwned => {
+    if (await operationKind(root, operationId) !== 'video') fail('IR_NOT_VIDEO', 'IR tasks have text results, not downloadable videos.');
     const job = await readJob(root, operationId);
     if (!job.taskId) fail(job.status === 'prepared' ? 'NOT_SUBMITTED' : 'SUBMIT_UNKNOWN', 'No confirmed task ID. Recover the original task ID with attach-task; do not resubmit.');
     if (options.redownloadMissing && job.status === 'downloaded') { job.status = 'generated'; delete job.output; }
@@ -79,9 +81,10 @@ export async function attachTask(root: string, operationId: string, taskId: stri
   if (!confirmedLink) fail('TASK_LINK_REQUIRED', 'Explicitly confirm that the recovered provider task ID belongs to this operation.');
   parse(TaskId, taskId);
   return withProjectLock(root, async () => {
+    if (await operationKind(root, operationId) !== 'video') fail('IR_NOT_VIDEO', 'Use the IR task recovery entry for this operation.');
     const disk = deps.persistence ?? persistence, job = await readJob(root, operationId);
     if (job.taskId || job.status !== 'submit_unknown') fail('TASK_LINK_CONFLICT', 'Only an unresolved creation can acquire a manually recovered task ID.');
-    if ((await listJobs(root)).some(j => j.taskId === taskId)) fail('TASK_LINK_CONFLICT', 'Task ID is already linked to another operation.');
+    await assertTaskIdAvailable(root, taskId, operationId);
     const observed = await queryWithRetry(deps.client, taskId, Options.parse({}), deps.sleep ?? delay);
     if (observed.taskId !== taskId) fail('QUERY_CONTRACT', 'Provider task identity mismatch.');
     await disk.receipt(root, { operationId, taskId, requestHash: job.requestHash, receivedAt: new Date().toISOString(), recoveredManually: true });

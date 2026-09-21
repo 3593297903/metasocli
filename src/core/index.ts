@@ -1,8 +1,11 @@
 export { initializeStory, importStory, loadStory } from './project.js';
-export { createPlan, loadPlan, validatePlan } from './planning.js';
+export { createPlan, createPlanFromContextIr, loadPlan, validatePlan } from './planning.js';
 export { registerAsset, inspectAssets } from '../assets/registry.js';
 export { MetasoClient } from '../metaso/client.js';
 export type { VideoClient, Observation, Submission } from '../metaso/client.js';
+export type { ContextIrClient, IrObservation } from '../metaso/client.js';
+export { submitContextIr, resumeContextIr, attachContextIrTask } from '../jobs/context-ir.js';
+export { listIrOperations, readIrOperation, readIrPrompt } from '../jobs/context-ir-store.js';
 export { submit } from '../jobs/submit.js';
 export { resume, attachTask } from '../jobs/resume.js';
 export { listJobs, readJob } from '../jobs/store.js';

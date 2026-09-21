@@ -3,8 +3,14 @@ import { MetasoError, fail } from '../core/errors.js';
 import { sha256Hex } from '../storage/canonical.js';
 import { validateRequest, type H3Request } from './h3.js';
 import { boundedBody, publicHttps, type Fetch } from './transport.js';
+import { TaskId } from '../contracts/task.js';
+import { validateIrRequest, type IrRequest } from './context-ir.js';
+export { TaskId } from '../contracts/task.js';
 
 export const API_BASE = 'https://metaso.cn/api/minimax/v2';
+// Independently configured. Public docs do not prove the /api alias for IR; no automatic route fallback.
+export const CONTEXT_IR_CREATE_URL = 'https://metaso.cn/api/minimax/v2/h3_context_ir';
+export const CONTEXT_IR_QUERY_BASE = 'https://metaso.cn/api/minimax/v2/query/video_generation';
 export function redact(value: unknown, secrets: readonly string[] = []): unknown {
   if (typeof value === 'string') {
     let s = value;
@@ -19,28 +25,33 @@ export interface Evidence { sha256: string; response: unknown; httpStatus?: numb
 export class ProviderError extends MetasoError {
   constructor(code: string, message: string, readonly options: { rejected?: boolean; retryable?: boolean; retryAfterMs?: number; evidence?: Evidence } = {}) { super(code, message); }
 }
-export const TaskId = z.union([z.string().min(1).max(200).regex(/^[A-Za-z0-9_-]+$/u), z.number().int().positive().max(Number.MAX_SAFE_INTEGER).transform(String)]);
 export interface Submission { taskId: string; evidence: Evidence }
 export interface Observation {
   taskId: string; status: 'queued' | 'running' | 'generated' | 'failed' | 'cancelled' | 'unknown';
   rawStatus: string; url?: string; duration?: number; resolution?: string; ratio?: string; evidence: Evidence;
 }
 export interface VideoClient { create(request: H3Request): Promise<Submission>; query(taskId: string): Promise<Observation> }
+export interface IrObservation {
+  taskId: string; model: 'MiniMax-H3'; taskType: 'h3_context_ir';
+  status: 'queued' | 'running' | 'enhanced' | 'failed' | 'cancelled' | 'unknown';
+  rawStatus: string; prompt?: string; evidence: Evidence;
+}
+export interface ContextIrClient { createContextIr(request: IrRequest): Promise<Submission>; queryContextIr(taskId: string): Promise<IrObservation> }
 export function retryAfter(value: string | null, now = Date.now()): number | undefined {
   if (!value) return undefined;
   if (/^\d+(\.\d+)?$/u.test(value)) return Math.ceil(Number(value) * 1000);
   const time = Date.parse(value); return Number.isFinite(time) ? Math.max(0, time - now) : undefined;
 }
-export class MetasoClient implements VideoClient {
+export class MetasoClient implements VideoClient, ContextIrClient {
   #key: string;
   constructor(key: string, private readonly fetcher: Fetch = fetch, private readonly timeoutMs = 30000) {
     if (!key.trim() || /[\r\n]/u.test(key)) fail('API_KEY_MISSING', 'Set METASO_API_KEY for authenticated operations.');
     this.#key = key;
   }
-  private async request(method: 'POST' | 'GET', suffix: string, body?: H3Request) {
+  private async request(method: 'POST' | 'GET', suffix: string, body?: H3Request | IrRequest, absoluteUrl?: string) {
     let response: Response, bytes: Buffer;
     try {
-      response = await this.fetcher(`${API_BASE}/${suffix}`, { method, redirect: 'error', signal: AbortSignal.timeout(this.timeoutMs),
+      response = await this.fetcher(absoluteUrl ?? `${API_BASE}/${suffix}`, { method, redirect: 'error', signal: AbortSignal.timeout(this.timeoutMs),
         headers: { Authorization: `Bearer ${this.#key}`, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
         ...(body ? { body: JSON.stringify(body) } : {}) });
       bytes = await boundedBody(response, 1024 * 1024);
@@ -70,7 +81,8 @@ export class MetasoClient implements VideoClient {
     const { raw, evidence } = await this.request('GET', `query/video_generation/${encodeURIComponent(taskId)}`);
     const task = raw && typeof raw === 'object' && 'task' in raw ? raw.task : raw;
     const parsed = z.object({ id: TaskId.optional(), task_id: TaskId.optional(), status: z.string().min(1).max(128), model: z.string().optional(),
-      content: z.object({ url: z.string().optional() }).nullable().optional(), duration: z.number().positive().optional(), resolution: z.string().optional(), ratio: z.string().optional() }).safeParse(task);
+      task_type: z.literal('generation').optional(), modality: z.literal('video').optional(),
+      content: z.object({ url: z.string().optional(), prompt: z.never().optional() }).nullable().optional(), duration: z.number().positive().optional(), resolution: z.string().optional(), ratio: z.string().optional() }).safeParse(task);
     if (!parsed.success) throw new ProviderError('QUERY_CONTRACT', 'Task response does not match the query contract.', { evidence });
     const t = parsed.data, ids = [t.id, t.task_id].filter(v => v !== undefined);
     if (!ids.length || ids.some(id => id !== taskId) || (t.model !== undefined && t.model !== 'MiniMax-H3')) throw new ProviderError('QUERY_CONTRACT', 'Query returned a different task identity or model.', { evidence });
@@ -82,5 +94,29 @@ export class MetasoClient implements VideoClient {
     }
     return { taskId, status, rawStatus: /^[a-z0-9_-]+$/iu.test(t.status) ? String(redact(t.status, [this.#key])) : 'unrecognized', ...(url ? { url } : {}),
       ...(t.duration ? { duration: t.duration } : {}), ...(t.resolution ? { resolution: t.resolution } : {}), ...(t.ratio ? { ratio: t.ratio } : {}), evidence };
+  }
+  async createContextIr(request: IrRequest): Promise<Submission> {
+    const { raw, evidence } = await this.request('POST', '', validateIrRequest(request), CONTEXT_IR_CREATE_URL);
+    const parsed = z.object({ task_id: TaskId.optional(), model: z.literal('MiniMax-H3').optional(), task_type: z.literal('h3_context_ir').optional(), task: z.object({ id: TaskId.optional(), task_id: TaskId.optional(),
+      model: z.literal('MiniMax-H3').optional(), task_type: z.literal('h3_context_ir').optional() }).optional() }).safeParse(raw);
+    const ids = parsed.success ? [parsed.data.task_id, parsed.data.task?.id, parsed.data.task?.task_id].filter((v): v is string => v !== undefined) : [];
+    if (!ids.length || new Set(ids).size !== 1) throw new ProviderError('CREATE_CONTRACT', 'IR create response lacks one unambiguous task identity; do not resubmit.', { evidence });
+    return { taskId: ids[0]!, evidence };
+  }
+  async queryContextIr(taskId: string): Promise<IrObservation> {
+    if (!TaskId.safeParse(taskId).success) fail('TASK_ID_INVALID', 'Invalid IR task ID.');
+    const { raw, evidence } = await this.request('GET', '', undefined, `${CONTEXT_IR_QUERY_BASE}/${encodeURIComponent(taskId)}`);
+    const task = raw && typeof raw === 'object' && 'task' in raw ? raw.task : raw;
+    const parsed = z.object({ id: TaskId.optional(), task_id: TaskId.optional(), status: z.string().min(1).max(128),
+      model: z.literal('MiniMax-H3'), task_type: z.literal('h3_context_ir'), modality: z.literal('text').optional(),
+      content: z.object({ prompt: z.string().optional(), url: z.never().optional() }).nullable().optional() }).safeParse(task);
+    if (!parsed.success) throw new ProviderError('IR_QUERY_CONTRACT', 'Query is not an identified MiniMax-H3 IR text task.', { evidence });
+    const t = parsed.data, ids = [t.id, t.task_id].filter(v => v !== undefined);
+    if (!ids.length || ids.some(id => id !== taskId)) throw new ProviderError('IR_QUERY_CONTRACT', 'IR query returned a different task ID.', { evidence });
+    const states: Record<string, IrObservation['status']> = { queued: 'queued', running: 'running', processing: 'running', succeeded: 'enhanced', success: 'enhanced', completed: 'enhanced', failed: 'failed', failure: 'failed', cancelled: 'cancelled' };
+    const status = states[t.status.toLowerCase()] ?? 'unknown';
+    if (status === 'enhanced' && !t.content?.prompt?.trim()) throw new ProviderError('IR_QUERY_CONTRACT', 'IR success lacks a nonempty text result.', { evidence });
+    return { taskId, model: t.model, taskType: t.task_type, status, rawStatus: /^[a-z0-9_-]+$/iu.test(t.status) ? String(redact(t.status, [this.#key])) : 'unrecognized',
+      ...(status === 'enhanced' ? { prompt: t.content!.prompt! } : {}), evidence };
   }
 }

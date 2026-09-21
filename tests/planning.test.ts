@@ -10,7 +10,8 @@ import { validateRequest } from '../src/metaso/h3.js';
 afterEach(cleanup);
 it('creates an immutable offline text plan with explicit Context IR and watermark settings', async () => {
   const f = await imported(); const plan = await createPlan(f.root, 'ep-1');
-  expect(plan.segments[0]).toMatchObject({ model: 'MiniMax-H3', resolution: '768P', duration: 6, effectiveRatio: '9:16', contextIr: false, watermark: false, mode: 'text' });
+  expect(plan.workflow).toEqual({ type: 'h3-inline-ir', stage: 'inline-video' });
+  expect(plan.segments[0]).toMatchObject({ model: 'MiniMax-H3', resolution: '768P', duration: 6, effectiveRatio: '9:16', contextIr: true, watermark: false, mode: 'text' });
   expect((await loadPlan(f.root, plan.planId)).planHash).toBe(plan.planHash);
   const { built } = await validatePlan(f.root, plan);
   expect(built[0]!.request.content).toEqual([{ type: 'text', text: f.text }]);
@@ -49,7 +50,7 @@ it('first-frame mode exposes effective adaptive ratio and rejects mixed referenc
 });
 it('rejects Seedance settings, invalid H3 durations and unsupported images', async () => {
   const f = await fixture();
-  await expect(importStory(f.root, { ...f.draft, segments: [{ ...f.draft.segments[0], duration: 3 }] })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  await expect(importStory(f.root, { ...f.draft, segments: [{ ...f.draft.segments[0], duration: 3 }] })).rejects.toMatchObject({ code: 'DURATION_TARGET' });
   await expect(importStory(f.root, { ...f.draft, segments: [{ ...f.draft.segments[0], parameters: { resolution: '480p' } }] })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   expect(() => inspectImage(Buffer.from('not an image'))).toThrow();
   expect(() => inspectImage(png(128, 128))).toThrow(expect.objectContaining({ code: 'IMAGE_DIMENSIONS' }));

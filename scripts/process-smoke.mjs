@@ -52,3 +52,4 @@ try {
   if (!rel.startsWith('metasocli-process-') || rel.includes('..') || isAbsolute(rel)) throw new Error('Unsafe test cleanup target');
   await rm(actual, { recursive: true, force: true });
 }
+await import('./context-ir-process-smoke.mjs');

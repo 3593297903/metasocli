@@ -27,9 +27,12 @@ export async function boundedBody(response: Response, limit: number): Promise<Bu
   return Buffer.concat(chunks);
 }
 export async function fetchImage(url: string, fetcher: Fetch = fetch): Promise<Buffer> {
+  return fetchMedia(url, 30 * 1024 * 1024, fetcher);
+}
+export async function fetchMedia(url: string, limit: number, fetcher: Fetch = fetch): Promise<Buffer> {
   let response: Response;
   try { response = await fetcher(publicHttps(url), { redirect: 'error', signal: AbortSignal.timeout(30000) }); }
-  catch { return fail('ASSET_FETCH_FAILED', 'Cannot fetch the public image; no credentials were forwarded.'); }
-  if (!response.ok) fail('ASSET_FETCH_FAILED', 'Image URL did not return a successful response.');
-  return boundedBody(response, 30 * 1024 * 1024);
+  catch { return fail('ASSET_FETCH_FAILED', 'Cannot fetch the public media; no credentials were forwarded.'); }
+  if (!response.ok) fail('ASSET_FETCH_FAILED', 'Media URL did not return a successful response.');
+  return boundedBody(response, limit);
 }
