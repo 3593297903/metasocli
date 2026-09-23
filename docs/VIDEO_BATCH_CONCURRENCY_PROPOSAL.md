@@ -1,6 +1,8 @@
 # 视频分段持续补位：四并发实施方案
 
-状态：2026-09-21 拟实施方案，尚未写入产品代码。本文中的新增命令不可当作已实现命令使用。
+状态：2026-09-21 已完成产品代码、CLI 和三个项目内 Skill 接入。本文保留设计依据；实际命令见 [README](../README.md#四并发持续补位)，实际离线验收结果和未真实验证项见 [实施报告](VIDEO_BATCH_CONCURRENCY_IMPLEMENTATION_REPORT.md)。未发起本次真实付费并发验收。
+
+交给 ts1 的实施任务书、CLI 参数定稿、执行边界和验收指令见 [VIDEO_BATCH_CONCURRENCY_TS1_HANDOFF.md](./VIDEO_BATCH_CONCURRENCY_TS1_HANDOFF.md)。本文第7节为接口概要，具体格式以该任务书为准。
 
 ## 1. 推荐实现
 
@@ -91,7 +93,7 @@ CLI 退出后远端任务仍可能运行，本地补位及下载会暂停。恢�
 
 计入4个名额的至少包含已预留待发送、submitting、queued、running，以及尚不能排除远端活动的未知任务。不能只计算 running，也不能在收到 task_id 时立即释放名额。429的自动退避次数和累计等待预算必须有上限，并在批次运行记录中固定；不能自动重试其他失败。
 
-## 7. 建议命令与 Skill 接入（均为拟新增）
+## 7. 命令与 Skill 接入（实现接口以任务书及 README 为准）
 
 ```text
 batch plan --root <story> --all-episodes --concurrency 4
@@ -101,7 +103,7 @@ batch status --root <story> --batch <batchId>
 batch resume --root <story> --batch <batchId>
 ```
 
-batch plan 根据选定原始集生成或复用合法的 inline 计划，支持限定段落的结构化清单；不自动选择历史 IR 副本集。上线时需确定并测试 CLI 参数的具体格式，以上是接口设计，不是当前可运行命令。
+batch plan 根据选定原始集生成合法的 inline 计划并复用相同请求的任务/成片，支持限定段落的结构化清单；不自动选择历史 IR 副本集。已实现 `--episodes`、`--selection`、`--all-episodes` 三选一，定稿格式见任务书及 README。
 
 剧本、成品提示词、旁白三个 Skill 均改为：整理原文和资产 → 核对选定范围 → 准备批次 → 已获生成授权后运行批次 → 汇总新建、复用、失败和输出。用户继续用“生成这三集全部视频”“跑完这些段”即可，不要求手动凑4段或逐段发命令。图片Skill无需改生成逻辑。
 

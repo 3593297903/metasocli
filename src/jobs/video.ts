@@ -98,7 +98,8 @@ export async function reconcileOutput(root: string, job: Job): Promise<SavedOutp
   if (actual.sha256 !== receipt.output.sha256 || actual.bytes !== receipt.output.bytes) fail('OUTPUT_CHANGED', 'Saved video differs from its download receipt.');
   return { path: outputPath(job), ...actual };
 }
-export async function downloadVideo(root: string, job: Job, url: string, duration: number, fetcher: Fetch = fetch, ratio = 'adaptive'): Promise<SavedOutput> {
+export async function downloadVideo(root: string, job: Job, url: string, duration: number, fetcher: Fetch = fetch, ratio = 'adaptive',
+  commit: (work: () => Promise<void>) => Promise<void> = work => work(), checkpoint?: (point: string) => Promise<void>): Promise<SavedOutput> {
   const existing = await reconcileOutput(root, job); if (existing) return existing;
   let response: Response | undefined, current = publicHttps(url);
   for (let redirects = 0; redirects <= 3; redirects++) {
@@ -128,9 +129,13 @@ export async function downloadVideo(root: string, job: Job, url: string, duratio
       if (Math.abs(metadata.width / metadata.height / (w! / h!) - 1) > 0.03) fail('VIDEO_RATIO', 'Downloaded video aspect ratio differs from the plan.');
     }
     const output = { path: outputPath(job), ...metadata };
-    await writeJson(await projectPath(root, downloadReceipt(job)), { operationId: job.operationId, taskId: job.taskId, requestHash: job.requestHash, output });
-    if (await exists(await projectPath(root, outputPath(job)))) fail('OUTPUT_CONFLICT', 'Output appeared during download.');
-    await rename(temp, target); moved = true; await syncDirectory(dirname(target));
+    await commit(async () => {
+      await writeJson(await projectPath(root, downloadReceipt(job)), { operationId: job.operationId, taskId: job.taskId, requestHash: job.requestHash, output });
+      if (await exists(await projectPath(root, outputPath(job)))) fail('OUTPUT_CONFLICT', 'Output appeared during download.');
+      await checkpoint?.('download-before-rename');
+      await rename(temp, target); moved = true; await syncDirectory(dirname(target));
+      await checkpoint?.('download-after-rename');
+    });
     return output;
   } finally {
     await reader.cancel().catch(() => {}); reader.releaseLock(); await handle.close();

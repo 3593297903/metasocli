@@ -17,6 +17,10 @@ description: 将成品视频提示词按原文导入 metasocli，准备素材和
 
 后续使用 [剧本入口的公开命令与恢复规则](../metasocli/SKILL.md)，并完整读取 [当前 Context IR 流程](../../docs/INLINE_CONTEXT_IR_WORKFLOW.md)。新草稿段参数 `contextIr` 写 true，素材登记后执行 `plan --root <story> --episode <id> --workflow h3-inline-ir`。确认每段 `contextIr:true`，默认停在视频提交前；说明视频请求包含 IR 费用。
 
-用户明确授权本次范围及此模式后，直接执行 `generate --root <story> --plan <id> --confirm`。每段实际视频请求必须携带布尔值 `context_ir_enabled:true`；不先单独执行 context-ir，不派生独立 IR 视频计划，不提前改写或翻译原文。提交前核对完整台词、说话人、顺序、镜头动作、图片编号和限制。IR 在服务端视频请求内执行，没有可先行核对的独立增强文本，不能声称已有该审阅结果。普通入口不自动添加统一旁白音频；已有明确音频绑定则保持原有归属。
+按 [剧本入口的批次规则](../metasocli/SKILL.md#已授权范围的四并发批次) 将授权范围内全部视频段组织成一个批次。离线执行 `batch plan --root <story> --episodes <有序集ID> --concurrency 4`；部分段使用 `--selection <selection.json>`，范围参数互斥，不重新拆写提示词。展示返回的 `plan.batchId`、哈希、总数/复用/活动/待提交数，未授权生成则暂停。用户明确授权本次范围及此模式后，直接执行 `batch run --root <story> --batch <batchId> --confirm`，不逐段或每4段再次确认。最多4段生成，终态持久化后持续补位，task_id 不是完成；下载另有2个名额，不等待整组。
+
+每段实际视频请求必须携带布尔值 `context_ir_enabled:true`；不先单独执行 context-ir，不派生独立 IR 视频计划，不提前改写或翻译原文。提交前核对完整台词、说话人、顺序、镜头动作、图片编号和限制。IR 在服务端视频请求内执行，没有可先行核对的独立增强文本，不能声称已有该审阅结果。普通入口不自动添加统一旁白音频；已有明确音频绑定则保持原有归属。
 
 历史 false 计划需针对原始集重新 plan，不能手改旧计划或自动将 IR 副本集再增强。已有任务按原 taskId 查询、恢复和下载，不能因响应没返回 context_ir_enabled 而重发；程序不伪造返回字段。当前范围已获授权时自动继续，不逐段再问。
+
+批次恢复使用 `batch resume --root <story> --batch <batchId>`，它可继续原授权内未提交段；`batch status` 只读本地，旧 `resume --operation` 不创建新任务。复用已验证成片，下载失败只恢复下载。未知创建保留名额并停止新增，禁止用新批次/运行目录绕过；明确失败不自动重做，安全429重试受保存预算限制。已有独立 IR 副本不能自动进入 `--all-episodes`，范围不明时显式选择原始集和段。

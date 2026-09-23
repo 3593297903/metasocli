@@ -23,7 +23,8 @@ export async function checkSubmissionConflicts(root: string, episodeId: string, 
   const all = [...videos, ...irs];
   const taskIds = all.flatMap(j => j.taskId ? [j.taskId] : []);
   if (new Set(taskIds).size !== taskIds.length) fail('TASK_LINK_CONFLICT', 'A remote task ID is linked to multiple operations.');
-  if (all.some(j => j.operationId !== ignoreOperationId && ['submitting', 'submit_unknown'].includes(j.status))) fail('SUBMIT_UNKNOWN', 'An IR or video creation is unresolved; recover its task ID before any new paid creation.');
+  if (all.some(j => j.operationId !== ignoreOperationId && j.status === 'submit_unknown')
+    || irs.some(j => j.operationId !== ignoreOperationId && j.status === 'submitting')) fail('SUBMIT_UNKNOWN', 'An IR or video creation is unresolved; recover its task ID before any new paid creation.');
   if (all.some(j => j.operationId !== ignoreOperationId && j.episodeId === episodeId && j.segmentId === segmentId
     && !['prepared', 'failed', 'cancelled', 'downloaded', 'enhanced'].includes(j.status))) fail('JOB_ACTIVE', 'This segment has an unfinished IR or video task; resume it first.');
 }

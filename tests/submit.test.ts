@@ -15,7 +15,7 @@ function fake(onCreate?: () => Promise<any>): VideoClient & { creates: number } 
 async function setup() { const f = await imported(); return { ...f, plan: await createPlan(f.root, 'ep-1') }; }
 it('persists intent before creation and deduplicates repeated execution and equivalent plans', async () => {
   const f = await setup(); const client = fake(async () => {
-    expect((await listJobs(f.root))[0]!.status).toBe('submit_unknown'); // On disk submitting is conservatively unknown to readers.
+    expect((await listJobs(f.root))[0]!.status).toBe('submitting'); // A verified live owner keeps its durable intent in-flight; lost ownership is still unknown.
     return { taskId: 'a', evidence };
   });
   const first = await submit(f.root, f.plan.planId, 's1', true, { client });

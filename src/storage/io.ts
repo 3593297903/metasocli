@@ -1,7 +1,7 @@
 import { mkdir, open, rename, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { fail } from '../core/errors.js';
+import { fail, isCode } from '../core/errors.js';
 import { safePath } from './paths.js';
 import { sameFileIdentity, requireFileIdentity } from './file-identity.js';
 import { sha256Hex } from './canonical.js';
@@ -44,8 +44,16 @@ export async function atomicWrite(target: string, bytes: string | Uint8Array): P
   let renamed = false;
   try {
     await handle.writeFile(bytes); await handle.sync(); await handle.close();
-    await safePath(target);
-    await rename(temp, target); renamed = true;
+    for (let attempt = 0; ; attempt++) {
+      await safePath(target);
+      try { await rename(temp, target); renamed = true; break; }
+      catch (error) {
+        // Windows may deny replacement while another process briefly has the old
+        // snapshot open. Keep both complete files; never unlink the destination.
+        if (process.platform !== 'win32' || attempt >= 15 || !['EPERM','EACCES','EBUSY'].some(code => isCode(error, code))) throw error;
+        await new Promise(resolve => setTimeout(resolve, Math.min(100, 10 * (attempt + 1))));
+      }
+    }
     await syncDirectory(dirname(target));
   } finally {
     await handle.close();
@@ -58,7 +66,15 @@ export async function writeJson(target: string, value: unknown): Promise<void> {
   await atomicWrite(target, text);
 }
 export async function readJson(file: string): Promise<unknown> {
-  try { return JSON.parse((await readStable(file)).toString('utf8')); }
-  catch (e) { if (e instanceof SyntaxError) fail('INVALID_JSON', 'Stored JSON is invalid; preserve it for recovery.'); throw e; }
+  for (let attempt = 0; ; attempt++) {
+    try { return JSON.parse((await readStable(file)).toString('utf8')); }
+    catch (e) {
+      // State writers replace complete JSON atomically. Replacement can change an open
+      // file's ctime or remove its pathname during a concurrent read (notably Windows).
+      // Reread a fresh stable snapshot; persistent absence/change and invalid JSON fail closed.
+      if (attempt < 3 && (isCode(e, 'FILE_CHANGED') || isCode(e, 'ENOENT'))) { await new Promise(resolve => setTimeout(resolve, 10)); continue; }
+      if (e instanceof SyntaxError) fail('INVALID_JSON', 'Stored JSON is invalid; preserve it for recovery.'); throw e;
+    }
+  }
 }
 export async function fileHash(file: string, limit?: number): Promise<string> { return sha256Hex(await readStable(file, limit)); }

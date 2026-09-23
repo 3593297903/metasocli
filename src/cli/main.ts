@@ -20,6 +20,9 @@ import { readIrOperation, listIrOperations, type IrPersistence } from '../jobs/c
 import { operationKind } from '../jobs/submission-guard.js';
 import { parse } from '../contracts/story.js';
 import { z } from 'zod';
+import { createBatchPlan, batchStatus, loadBatch, loadBatchRun } from '../jobs/batch-store.js';
+import { runBatch } from '../jobs/batch.js';
+import { reconcileRuntime, occupied } from '../jobs/coordinator.js';
 
 export const HELP = `metasocli 0.1.0 — independent Metaso MiniMax-H3 CLI
 All story commands require --root <dedicated-story-directory>.
@@ -36,6 +39,11 @@ plan       --root <path> --from-context-ir <operation-id> --review <review.json>
 context-ir --root <path> --plan <prepare-id> --segment <id> --confirm [--submit-only] [--retry-of <operation-id>]
            [--max-polls <1..720>] [--poll-ms <0..60000>]
 generate   --root <path> --plan <id> --confirm [--segment <id>] [--submit-only] [--retry-of <operation-id>]
+batch plan --root <path> (--episodes <ordered,ids>|--selection <json>|--all-episodes) [--concurrency <1..4>]
+batch run  --root <path> --batch <id> --confirm [--max-polls <1..720>] [--poll-ms <0..60000>]
+batch resume --root <path> --batch <id> [--max-polls <1..720>] [--poll-ms <0..60000>]
+batch status --root <path> --batch <id>
+batch register --root <path>  Register known existing tasks in the shared installation capacity ledger.
 status     --root <path> [--operation <id>] [--remote]
 resume     --root <path> --operation <id> [--max-polls <1..720>] [--poll-ms <0..60000>]
 download   --root <path> --operation <id> [--redownload-missing]
@@ -47,6 +55,9 @@ generate requires authorization for video generation including inline IR; planni
 Legacy independent IR commands remain available for text tasks and recovery. IR never automatically creates video.
 generate refuses false-IR plans: replan the original episode with h3-inline-ir. Use resume for existing tasks.
 resume/status/download never create a task or change its original parameters.
+batch resume may create the remaining items of its saved, authorized scope. Receipt of task_id does not free a slot.
+Video slots are shared (max 4); downloads run separately (max 2). Only one batch scheduler runs per installation.
+Use --runtime-dir <isolated-directory> or METASO_RUNTIME_DIR for development/tests; production defaults to ~/.metasocli-runtime.
 init/import/plan/status/doctor work without an API key. Remote operations use METASO_API_KEY or this installation's encrypted credential.
 JSON output is the default. --json is accepted. No global setup or old installation is touched.
 `;
@@ -76,6 +87,10 @@ const flags: Record<string, { strings?: string[]; booleans?: string[] }> = {
   status: { strings: ['operation'], booleans: ['remote'] },
   resume: { strings: ['operation', 'max-polls', 'poll-ms'] }, download: { strings: ['operation'], booleans: ['redownload-missing'] },
   'attach-task': { strings: ['operation', 'task'], booleans: ['confirm-task-link'] }, doctor: {},
+  'batch plan': { strings: ['episodes', 'selection', 'concurrency'], booleans: ['all-episodes'] },
+  'batch run': { strings: ['batch', 'max-polls', 'poll-ms', 'scheduler-wait-ms'], booleans: ['confirm'] },
+  'batch resume': { strings: ['batch', 'max-polls', 'poll-ms', 'scheduler-wait-ms'] },
+  'batch status': { strings: ['batch'] }, 'batch register': {},
 };
 function pollOptions(v: Record<string, Value>) {
   const maxPolls = number(v, 'max-polls'), pollIntervalMs = number(v, 'poll-ms');
@@ -89,9 +104,9 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
   try {
     if (!args.length || args.includes('--help') || args[0] === 'help') return { exitCode: 0, data: HELP };
     if (args[0] === '--version') return { exitCode: 0, data: '0.1.0' };
-    const count = ['assets', 'auth'].includes(args[0] ?? '') ? 2 : 1, command = args.slice(0, count).join(' '), spec = flags[command];
+    const count = ['assets', 'auth', 'batch'].includes(args[0] ?? '') ? 2 : 1, command = args.slice(0, count).join(' '), spec = flags[command];
     if (!spec) fail('CLI_ARGUMENT', 'Unknown command. Run --help.');
-    const options: Record<string, { type: 'string' | 'boolean' }> = { root: { type: 'string' }, json: { type: 'boolean' } };
+    const options: Record<string, { type: 'string' | 'boolean' }> = { root: { type: 'string' }, json: { type: 'boolean' }, 'runtime-dir': { type: 'string' } };
     for (const name of spec.strings ?? []) options[name] = { type: 'string' };
     for (const name of spec.booleans ?? []) options[name] = { type: 'boolean' };
     let v: Record<string, Value>;
@@ -99,13 +114,31 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
     catch { return fail('CLI_ARGUMENT', 'Invalid command options. Run --help; values and secrets are not echoed.'); }
     if (command === 'auth status') return { exitCode: 0, data: { ...(await credentialStatus()), provider: 'Metaso', model: 'MiniMax-H3', liveCheckPerformed: false } };
     const root = resolve(required(v, 'root'));
-    const deps = async () => injected ?? { client: new MetasoClient(await loadApiKey()) };
+    const deps = async () => ({ ...(injected ?? { client: new MetasoClient(await loadApiKey()) }), ...(v['runtime-dir'] ? { runtimeRoot: resolve(required(v, 'runtime-dir')) } : {}) });
     const irDeps = async (): Promise<IrDependencies> => {
       if (!injected) return { client: new MetasoClient(await loadApiKey()) };
       if (!injected.irClient) fail('IR_CLIENT_MISSING', 'Injected dependencies require a separate IR client.');
       return { client: injected.irClient, fetcher: injected.fetcher, persistence: injected.irPersistence, sleep: injected.sleep };
     };
     if (command === 'init') return { exitCode: 0, data: await initializeStory(root, typeof v.name === 'string' ? v.name : basename(root)) };
+    if (command === 'batch plan') return { exitCode: 0, data: await createBatchPlan(root, {
+      ...(v.episodes !== undefined ? { episodes: required(v, 'episodes').split(',').map(id => id.trim()) } : {}),
+      ...(v.selection !== undefined ? { selection: await readJson(resolve(required(v, 'selection'))) } : {}),
+      allEpisodes: v['all-episodes'] === true, concurrency: number(v, 'concurrency'),
+    }) };
+    if (command === 'batch status') return { exitCode: 0, data: await batchStatus(root, required(v, 'batch')) };
+    if (command === 'batch register') {
+      const ledger = await reconcileRuntime(root, v['runtime-dir'] as string | undefined ?? injected?.runtimeRoot);
+      return { exitCode: 0, data: { registeredProjects: ledger.projects, occupied: occupied(ledger), limit: 4, liveCheckPerformed: false } };
+    }
+    if (command === 'batch run' || command === 'batch resume') {
+      if (command === 'batch run' && v.confirm !== true) fail('GENERATION_NOT_AUTHORIZED', 'batch run needs authorization for the frozen scope and inline IR.');
+      const id = required(v, 'batch'), plan = await loadBatch(root, id), polling = pollOptions(v), wait = number(v, 'scheduler-wait-ms');
+      if (wait !== undefined && wait > 300000) fail('CLI_ARGUMENT', '--scheduler-wait-ms must be 0–300000.');
+      if (command === 'batch resume' && !await loadBatchRun(root, plan)) fail('GENERATION_NOT_AUTHORIZED', 'No saved batch authorization; resume cannot authorize new work.');
+      const result = await runBatch(root, id, command === 'batch run', { ...await deps(), ...(!injected ? { onStart: (summary: unknown) => { process.stderr.write(JSON.stringify({ event: 'batch-start', summary }) + '\n'); } } : {}) }, { ...polling, ...(wait === undefined ? {} : { schedulerWaitMs: wait }) });
+      return { exitCode: result.run?.status === 'complete' ? 0 : 2, data: result };
+    }
     if (command === 'import') {
       let draft: unknown;
       if (v.draft) {

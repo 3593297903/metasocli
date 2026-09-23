@@ -13,13 +13,16 @@ node E:\metasocli\dist\cli\main.js plan --root <story> --episode <id> --workflow
 ```
 
 4. 展示 planId、段落范围、时长、模型、分辨率、图片/音频顺序和完整请求文本，说明视频请求包含收费 IR，默认在提交前暂停。仅配置 true 或创建计划不会联网生成。用户已明确授权当前范围和此模式时直接继续，不逐段再次询问；本次程序升级不等于授权生成业务视频。
-5. 授权后直接执行：
+5. 素材就绪后按当前选择范围建立离线批次；授权后运行整个批次，不逐段或每4段再次确认：
 
 ```text
-node E:\metasocli\dist\cli\main.js generate --root <story> --plan <plan-id> --confirm
+node E:\metasocli\dist\cli\main.js batch plan --root <story> --episodes <有序集ID> --concurrency 4
+node E:\metasocli\dist\cli\main.js batch run --root <story> --batch <batchId> --confirm
 ```
 
-每段只由客户端创建一个视频任务；`--segment <id>` 限定单段。提交时重新构造同一请求并核对计划哈希，HTTP 客户端将该请求完整 JSON 序列化发送，不能只在提示词或日志里写 true。CLI 会在读取凭据、创建任何任务前拒绝所选范围内含 false 的计划，返回 `INLINE_IR_REQUIRED`。新计划不能直接覆盖旧计划中的开关或哈希。
+部分段用 `batch plan --selection <selection.json>`，完整格式见 [README](../README.md#四并发持续补位)。单段兼容命令仍为 `generate --plan <id> --segment <id> --confirm`。提交时重新构造同一请求并核对计划哈希，HTTP 客户端将该请求完整 JSON 序列化发送，不能只在提示词或日志里写 true。CLI 会在读取凭据、创建任何任务前拒绝所选范围内含 false 的计划，返回 `INLINE_IR_REQUIRED`；批次只接受冻结的 inline 计划。新计划不能直接覆盖旧计划中的开关或哈希。
+
+默认4个生成占位持续补位，收到 task_id 不释放；终态验证落盘后释放。下载独立最多2个并行。`batch status` 只读本地，`batch resume` 可接回任务并继续原授权内待提交段；旧 `resume --operation` 始终不新建。未知创建保留占位、停止新增，下载失败仅恢复下载。所有新版 CLI 视频创建入口共用安装名额；真实账户并发与限流尚未付费验收。
 
 ## 历史项目与恢复
 

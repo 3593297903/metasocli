@@ -23,7 +23,7 @@ export function redact(value: unknown, secrets: readonly string[] = []): unknown
 }
 export interface Evidence { sha256: string; response: unknown; httpStatus?: number }
 export class ProviderError extends MetasoError {
-  constructor(code: string, message: string, readonly options: { rejected?: boolean; retryable?: boolean; retryAfterMs?: number; evidence?: Evidence } = {}) { super(code, message); }
+  constructor(code: string, message: string, readonly options: { rejected?: boolean; retryable?: boolean; retryAfterMs?: number; evidence?: Evidence; httpStatus?: number; safeToRetry?: boolean } = {}) { super(code, message); }
 }
 export interface Submission { taskId: string; evidence: Evidence }
 export interface Observation {
@@ -44,14 +44,14 @@ export function retryAfter(value: string | null, now = Date.now()): number | und
 }
 export class MetasoClient implements VideoClient, ContextIrClient {
   #key: string;
-  constructor(key: string, private readonly fetcher: Fetch = fetch, private readonly timeoutMs = 30000) {
+  constructor(key: string, private readonly fetcher: Fetch = fetch, private readonly timeoutMs = 30000, private readonly createTimeoutMs = 120000) {
     if (!key.trim() || /[\r\n]/u.test(key)) fail('API_KEY_MISSING', 'Set METASO_API_KEY for authenticated operations.');
     this.#key = key;
   }
   private async request(method: 'POST' | 'GET', suffix: string, body?: H3Request | IrRequest, absoluteUrl?: string) {
     let response: Response, bytes: Buffer;
     try {
-      response = await this.fetcher(absoluteUrl ?? `${API_BASE}/${suffix}`, { method, redirect: 'error', signal: AbortSignal.timeout(this.timeoutMs),
+      response = await this.fetcher(absoluteUrl ?? `${API_BASE}/${suffix}`, { method, redirect: 'error', signal: AbortSignal.timeout(method === 'POST' ? this.createTimeoutMs : this.timeoutMs),
         headers: { Authorization: `Bearer ${this.#key}`, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
         ...(body ? { body: JSON.stringify(body) } : {}) });
       bytes = await boundedBody(response, 1024 * 1024);
@@ -61,8 +61,16 @@ export class MetasoClient implements VideoClient, ContextIrClient {
     let raw: unknown;
     try { raw = JSON.parse(bytes.toString('utf8')); } catch { raw = { malformedJson: true }; }
     const evidence: Evidence = { sha256: sha256Hex(bytes), response: redact(raw, [this.#key]), httpStatus: response.status };
+    const hasIdentity = (value: unknown): boolean => !!value && typeof value === 'object' && Object.entries(value).some(([key, child]) => /^(?:task_?id|id)$/iu.test(key) || hasIdentity(child));
+    const meaningfulError = (value: unknown): boolean => typeof value === 'string' ? !!value.trim()
+      : !!value && typeof value === 'object' && !Array.isArray(value) && Object.entries(value).some(([key, child]) => ['message','code','type'].includes(key) && (typeof child === 'string' ? !!child.trim() : typeof child === 'number' && child !== 0));
+    const rejectionBody = !!raw && typeof raw === 'object' && (('error' in raw && meaningfulError(raw.error))
+      || ('base_resp' in raw && !!raw.base_resp && typeof raw.base_resp === 'object' && 'status_code' in raw.base_resp
+        && typeof raw.base_resp.status_code === 'number' && Number.isInteger(raw.base_resp.status_code) && raw.base_resp.status_code > 0));
+    const safeRateLimit = response.status === 429 && rejectionBody && !hasIdentity(raw);
     if (!response.ok) throw new ProviderError('PROVIDER_HTTP', `Provider returned HTTP ${response.status}.`, {
-      rejected: method === 'POST' && [400, 401, 402, 403, 404, 422, 429].includes(response.status),
+      rejected: method === 'POST' && !hasIdentity(raw) && ([400, 401, 402, 403, 404, 422].includes(response.status) || safeRateLimit),
+      httpStatus: response.status, safeToRetry: method === 'POST' && safeRateLimit,
       retryable: method === 'GET' && (response.status === 429 || response.status >= 500),
       retryAfterMs: retryAfter(response.headers.get('retry-after')), evidence,
     });

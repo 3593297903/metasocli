@@ -51,7 +51,11 @@ node E:\metasocli\dist\cli\main.js assets register --root <story> --id narrator-
 
 ## 计划、生成与恢复
 
-后续使用 [剧本入口的公开命令与恢复规则](../metasocli/SKILL.md)，并完整读取 [当前 Context IR 流程](../../docs/INLINE_CONTEXT_IR_WORKFLOW.md)。新草稿段参数 `contextIr` 写 true，执行 `plan --root <story> --episode <id> --workflow h3-inline-ir`，确认全部计划段 `contextIr:true`。默认完成素材和离线计划后停在视频提交前。用户授权当前范围及含 IR 的视频模式后，直接 `generate --root <story> --plan <id> --confirm`，不逐段请求批准，也不先单独执行 context-ir 或 plan --from-context-ir。
+后续使用 [剧本入口的公开命令与恢复规则](../metasocli/SKILL.md)，并完整读取 [当前 Context IR 流程](../../docs/INLINE_CONTEXT_IR_WORKFLOW.md)。新草稿段参数 `contextIr` 写 true，执行 `plan --root <story> --episode <id> --workflow h3-inline-ir`，确认全部计划段 `contextIr:true`。按剧本入口批次规则，将选定全部集和段离线冻结为一个 `batch plan --root <story> --episodes <有序集ID> --concurrency 4`；部分段用 `--selection <selection.json>`，不按标题重拆技术 episodeId，不按8段截断。展示 `plan.batchId`、哈希和总数/复用/活动/待提交数，默认停在视频提交前。用户授权当前范围及含 IR 的视频模式后，直接 `batch run --root <story> --batch <batchId> --confirm`，不逐段或每4段请求批准，也不先单独执行 context-ir 或 plan --from-context-ir。
+
+最多4段占用生成名额，任一服务端终态验证并持久化后补下一段，task_id 不代表完成；最多2个独立下载，慢下载不堵塞补位。有旁白的段继续绑定原参考音频，没有旁白的段不添加音频，乱序完成不改变图序、cues、资产归属或输出路径。按用户明确集序、原段序提交；独立 IR 历史范围不明时使用显式选择，不自动把副本纳入 `--all-episodes`。
+
+中断后 `batch status --root <story> --batch <batchId>` 只读记录；`batch resume --root <story> --batch <batchId>` 沿用原 ID 和授权，允许继续原范围内未提交段。旧 `resume --operation` 不创建新任务。复用合格成片，下载失败只恢复下载；未知创建保留占位并暂停新增，明确失败不自动重做，安全429仅在持久化预算内退避。多个新版入口共用安装名额，不能通过并开终端或换运行目录绕过。
 
 计划应展示：原参考图顺序、旁白音频哈希、音频时长、各段旁白范围、最终提示词及模型参数。有旁白的请求会包含 `audio_url` / `role: reference_audio`，与图片共同进入 Metaso H3 多模态参考模式；没有 LibTV 节点、连线或旧 CLI。
 

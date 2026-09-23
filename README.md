@@ -2,6 +2,10 @@
 
 独立的 Node.js / TypeScript CLI，将完整剧本或成品视频提示词整理为 Metaso `MiniMax-H3` 请求计划，并管理提交、查询、恢复及视频下载。当前版本 **0.1.0**。2026-09-21 起默认视频请求明确启用 `context_ir_enabled:true`；本次切换只做离线验证，没有发起付费生成。
 
+当前源码包含视频四并发持续补位、独立下载，以及 Windows 路径大小写和已完成项目归档的恢复修复。详见 [批次实施报告](docs/VIDEO_BATCH_CONCURRENCY_IMPLEMENTATION_REPORT.md) 与 [独立复核](docs/VIDEO_BATCH_CONCURRENCY_RECHECK.md)。
+
+2026-09-23 已重新构建并通过完整离线检查，见 [上传前核验](docs/UPLOAD_VERIFICATION_20260923.md)。
+
 ## 构建与本地运行
 
 需要 Node.js 24+。在本项目执行：
@@ -12,7 +16,7 @@ npm run check
 node .\dist\cli\main.js --help
 ```
 
-依赖固定版本，缓存留在本项目 `.npm-cache`。程序不依赖 LibTV CLI、旧源码、旧 Skill 或旧登录状态。不创建全局 CLI 安装、MCP 注册或用户运行目录。四份原 Skill 与新增旁白变体的正文位于 `skills/`，Codex 项目入口位于 `.agents/skills/`。本机另经用户授权添加了普通成品提示词与旁白的两个用户级入口；本版没有通用用户级 Skill 安装器。npm 包的唯一 bin 为 `metasocli`。
+依赖固定版本，缓存留在本项目 `.npm-cache`。程序不依赖 LibTV CLI、旧源码、旧 Skill 或旧登录状态，不创建全局 CLI 安装或 MCP 注册。视频提交/恢复使用独立 `%USERPROFILE%\.metasocli-runtime` 保存共享并发记录；开发测试注入临时运行目录。四份原 Skill 与新增旁白变体的正文位于 `skills/`，Codex 项目入口位于 `.agents/skills/`。本机另经用户授权添加了普通成品提示词与旁白的两个用户级入口；本版没有通用用户级 Skill 安装器。npm 包的唯一 bin 为 `metasocli`。
 
 ## 在 Codex 中使用 Skill
 
@@ -49,6 +53,8 @@ $metasocli-video-prompts-旁白
 在本仓库也可单独调用 `$metasocli-reference-images`，指定已有故事目录和需要准备的素材；它会先核对上游图片请求和状态，不生成视频。跨项目使用上述两个用户级视频入口时，会按链接读取同一套图片技能和模板，无需再安装旧图片 Skill。模板与校验器均在本项目内，运行不依赖 LibTV。
 
 图片交接校验器使用 Python 3.10+ 标准库，检查素材/段落分配、完整配方传递、文件哈希和暂存路径；它不做视觉评分或保证出图外观。先 `npm run build`，再 `npm run test:image-skill` 可运行离线交接及 CLI 登记/计划检查；Node CLI 本身不依赖 Python。没有生成新图片或提交视频的测试，不等于真实图片/视频效果验收。
+
+外部 `gpt-image-2.5` 生图 API 目前仅完成 [接入分析](docs/IMAGE_API_INTEGRATION_ANALYSIS.md)，尚未实现请求客户端、图片并发队列或付费验收；当前图片执行方式仍为宿主原生生图或已有图片导入。
 
 ## 两个离线入口
 
@@ -110,7 +116,44 @@ node $cli generate --root $story --plan $plan.planId --confirm
 
 段 ID 从计划读取，示例单段导入为 `s1`。CLI 在联网前检查所选段全部为 `contextIr:true`，false 计划返回 `INLINE_IR_REQUIRED`，需重新 plan；已经提交的旧任务使用 resume。当前内联模式没有单独的增强文本审阅步骤，不能声称生成前已经核对服务端内部改写。接口不要求回传这个开关，程序不会伪造响应里的 true，也不会因缺少字段重新生成。
 
-默认串行处理计划各段，提交后有界查询并下载；`--segment <id>` 限定单段，`--submit-only` 只提交。`--max-polls` 默认 60（上限 720），`--poll-ms` 默认 5000。达到轮询限额保留原任务，不判定远端失败。CLI 退出后远端任务可能继续；本地没有常驻服务。
+单段/旧兼容 `generate` 仍顺序处理计划各段，提交后有界查询并下载；`--segment <id>` 限定单段，`--submit-only` 只提交。这些入口与批次共用最多4个生成占位；需要持续补位时使用下文批次命令。`--max-polls` 默认 60（上限 720），`--poll-ms` 默认 5000。达到轮询限额保留原任务，不判定远端失败。CLI 退出后远端任务可能继续；本地没有常驻服务。
+
+## 四并发持续补位
+
+三个项目内入口 Skill 均使用批次流程。素材准备完成后，离线冻结选定范围；未授权生成时在此暂停。下列 plan/status 命令不付费、不读取 Key。选择参数三选一，`--episodes` 的集顺序和每集原段序决定派发顺序，数量不限于8段：
+
+```powershell
+$cli = 'E:\metasocli\dist\cli\main.js'
+$story = 'E:\metasocli\projects\我的视频'
+$batch = node $cli batch plan --root $story --episodes ep-1,ep-2,ep-3 --concurrency 4 | ConvertFrom-Json
+$batch.summary
+$batchId = $batch.plan.batchId
+node $cli batch status --root $story --batch $batchId
+# 只有用户已明确授权以上范围及包含 IR 的视频模式后执行：
+node $cli batch run --root $story --batch $batchId --confirm
+# 中断、轮询预算用完或下载失败后，恢复同一批次：
+node $cli batch resume --root $story --batch $batchId
+```
+
+`batch plan --selection <selection.json>` 用于部分段，也适用于一个技术 episodeId 内含多个剧情集的故事，数组决定顺序，集/段不能重复：
+
+```json
+{"schemaVersion":1,"episodes":[{"episodeId":"ep-1","segmentIds":["s3","s4"]},{"episodeId":"ep-2","segmentIds":["s1"]}]}
+```
+
+`batch plan --all-episodes` 按故事清单顺序选原始集。若存在独立 IR 操作历史或可识别的派生来源，返回 `BATCH_ORIGINALS_AMBIGUOUS`，要求改用显式范围；不按 `-ir` 文件名猜测、拆写故事或自动叠加增强。
+
+每个批次保存不可变计划哈希、请求及素材指纹、范围和运行授权。默认最多4个生成名额，可设置1—4。4个创建请求可同时在途；task_id 仅代表已受理，queued/running/受控 submitting/未知都继续占位。服务端终态验证并持久化后补下一个待提交段。下载另有最多2个并发，慢下载和下载失败不堵塞生成补位；输出仍为 `outputs/<episodeId>/<segmentId>-<operationId>.mp4`。
+
+`batch run --confirm` 将授权绑定该批次哈希；`batch resume` 只能使用已保存授权，**允许继续范围内尚未提交的段**。旧 `resume --operation`、status、download 始终不创建任务。批次会接回已有 task_id，重建缺失的批次任务链接，复用通过文件/回执检查的成片。创建未知停止新增并保留占位，已知任务继续查询和下载；失败段不自动重做。只有明确未受理且无任何任务 ID 的429可自动重试，每段最多2次、批次累计等待最多60000ms，预算/每次尝试在新 POST 前保存；遵守更长 Retry-After 时超出预算则暂停。超时、5xx、矛盾回包绝不自动重发，401/402/403停止新增。POST 响应上限120秒、GET30秒，延长超时不代表幂等保证。
+
+`batch run/resume` 支持 `--max-polls 60 --poll-ms 5000`（每个任务、本次运行的轮询预算）及 `--scheduler-wait-ms 30000`（0—300000）。同一运行目录只有一个活跃批次调度器，竞争批次等待，超时返回 `LOCK_BUSY`；普通新建入口在活跃批次期间返回 `SCHEDULER_BUSY`。占满时单段提交返回 `CAPACITY_FULL`，先查询/恢复既有任务；不能换目录绕开名额。
+
+共享目录默认 `%USERPROFILE%\.metasocli-runtime`，可用 `METASO_RUNTIME_DIR` 或 `--runtime-dir <path>` 注入**同一个**安装运行目录；测试用临时目录。历史已知项目可先 `batch register --root <story>`，只将已有任务登记到共享名额，不联网创建。首次登记会扫描该项目原任务，此后会核对已登记项目。Windows 同一目录的不同大小写统一为一个身份，兼容旧 ledger 的写法；不同目录不能共用项目或操作身份。它不能发现未登记的其他项目，也不能控制网页、旧程序或其他电脑的调用；4是本地上限，真实账户额度和并发仍待授权验收。
+
+已完成项目归档：先让查询/恢复确认所有生成终态，并运行 `batch register --root <story>` 同步共享记录，再移动完整项目目录。下一次共享核验发现旧目录不存在时，只有 hash 校验通过、有任务历史且全部为 generated/downloaded/failed/cancelled 的项目才自动标记 `retiredAt`、退出活动扫描；保留项目身份、全部原任务 ID、请求哈希和终态记录，不需要清理 ledger。旧版无 `retiredAt` 的 ledger 同样适用。仍有预留、提交中、排队、运行、未知状态，或只有空登记而无终态证据的缺失目录，返回 `COORDINATOR_PROJECT_MISSING`，保留名额并阻止新提交；须恢复原目录后沿用原任务处理。原路径恢复后重新核验身份；本机制不自动迁移活动项目，也不接受另一实际目录冒用原身份。不要删除 ledger/锁/任务来释放名额。
+
+批次位于 `.metasocli/batches/<batchId>/{plan,run}.json`；共享 `video-ledger.json` 只做预留与索引，单段 Job/receipt 是恢复依据。提交和查询不持有长项目锁，下载仅持本任务锁；固定共享锁→短项目写锁顺序，网络、轮询等待和下载流在状态锁外执行。异常退出不清空未知名额。记录与轨迹见 [实施报告](docs/VIDEO_BATCH_CONCURRENCY_IMPLEMENTATION_REPORT.md)。
 
 ```text
 status      --root <story>                           本地只读，不需要 Key
@@ -120,7 +163,7 @@ download    --root <story> --operation <id>          仅查询并恢复原视频
 download    --root <story> --operation <id> --redownload-missing
 ```
 
-提交前先落盘 prepared/submitting 请求记录，取得 taskId 后先保存独立回执。同一请求重复执行复用已有操作，创建请求不自动重试；本地哈希不代表服务端幂等。
+提交前先落盘 prepared/submitting 请求记录及共享预留，取得 taskId 后先保存独立回执。同一请求重复执行复用已有操作；单段命令不自动重试创建，批次只有上述明确拒绝的429例外。本地哈希不代表服务端幂等。
 
 新流程的任务与回执继续位于 `.metasocli/jobs/` 和 `.metasocli/receipts/`。历史独立 IR 数据位于 `.metasocli/context-ir/`，本地 status 仍列 `contextIrOperations`，可以按原 ID 恢复。任一阶段未知提交会在项目锁内阻止新的收费创建。
 

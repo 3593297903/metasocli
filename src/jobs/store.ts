@@ -9,6 +9,7 @@ import { fail } from '../core/errors.js';
 import { exists, projectPath } from '../storage/paths.js';
 import { readJson, writeJson } from '../storage/io.js';
 import { redact, type Evidence } from '../metaso/client.js';
+import { liveSubmission } from './submission-owner.js';
 
 export const jobPath = (root: string, operationId: string) => projectPath(root, `.metasocli/jobs/${parse(z.uuid(), operationId)}.json`);
 export const receiptPath = (root: string, operationId: string) => projectPath(root, `.metasocli/receipts/${parse(z.uuid(), operationId)}.json`);
@@ -39,7 +40,7 @@ export async function readJob(root: string, operationId: string): Promise<Job> {
     if (receipt.operationId !== job.operationId || receipt.requestHash !== job.requestHash || (job.taskId && job.taskId !== receipt.taskId)) fail('RECEIPT_CONFLICT', 'Job receipt identity mismatch.');
     job.taskId = receipt.taskId;
     if (['prepared', 'submitting', 'submit_unknown'].includes(job.status)) job.status = 'queued';
-  } else if (job.status === 'submitting') job.status = 'submit_unknown';
+  } else if (job.status === 'submitting' && !await liveSubmission(root, job)) job.status = 'submit_unknown';
   if (['queued', 'running', 'query_unknown', 'generated', 'downloaded'].includes(job.status) && !job.taskId) fail('JOB_CONFLICT', 'Accepted task record is missing its remote ID.');
   return job;
 }

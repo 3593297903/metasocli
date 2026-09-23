@@ -1,5 +1,7 @@
 # metasocli 独立项目方案
 
+2026-09-21 批次实施补充：新增不可变批次、授权运行索引和安装级共享生成预留，默认4个生成占位持续补位、2个独立下载。单段视频生命周期拆为短状态写锁与锁外 HTTP；按共享协调锁→项目写锁顺序，用提交归属 token 区分活跃 submitting 和失联 unknown。terminal Job 持久化后才释放名额，batch resume 可在原授权范围内补交，旧 resume 永不 POST。Plan/Story/Job 原格式及 H3、时长、图片、旁白构造保持兼容。详见 [批次命令](../README.md#四并发持续补位) 和 [实施报告](VIDEO_BATCH_CONCURRENCY_IMPLEMENTATION_REPORT.md)；下文串行/长锁描述属于早期设计。
+
 2026-09-21 当前默认改为 [视频请求内启用 Context IR](INLINE_CONTEXT_IR_WORKFLOW.md)：新计划使用 `h3-inline-ir / inline-video`，实际视频 JSON 显式发送 `context_ir_enabled:true`，不先执行独立 IR。CLI 在联网前拒绝 false 计划创建视频；已有任务按原 ID 恢复。下文 2026-09-19 的两阶段设计作为历史兼容记录保留。
 
 日期：2026-09-17。本文保留独立项目的初始设计；0.1.0 离线实现与实际命令现已交付，见 [README](../README.md) 和 [验证记录](VERIFICATION.md)。真实接口验收尚未完成。命名与边界以仓库 AGENTS.md 为准。

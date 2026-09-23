@@ -12,9 +12,11 @@ import { resume } from '../dist/jobs/resume.js';
 import { sha256Hex } from '../dist/storage/canonical.js';
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const base = await mkdtemp(join(tmpdir(), 'metasocli-process-'));
+const previousRuntime = process.env.METASO_RUNTIME_DIR;
 try {
   await mkdir(join(base, 'home'));
   for (const mode of ['unknown', 'receipt']) {
+    process.env.METASO_RUNTIME_DIR = join(base, 'runtime-' + mode);
     const root = join(base, mode), source = join(base, `${mode}.txt`), text = '林舟：完整台词。\n';
     await writeFile(source, text); await initializeStory(root, mode);
     await importStory(root, { episodeId: 'ep-1', kind: 'video-prompts', source, segments: [{ id: 's1', start: 0, end: text.length, duration: 6 }] });
@@ -48,8 +50,10 @@ try {
     console.log(`PASS process termination at ${mode}; no duplicate creation; PATH excludes old CLI${permissions.length ? '; old source blocked by Node permissions' : ''}`);
   }
 } finally {
+  if (previousRuntime === undefined) delete process.env.METASO_RUNTIME_DIR; else process.env.METASO_RUNTIME_DIR = previousRuntime;
   const actual = await realpath(base), parent = await realpath(tmpdir()), rel = relative(parent, actual);
   if (!rel.startsWith('metasocli-process-') || rel.includes('..') || isAbsolute(rel)) throw new Error('Unsafe test cleanup target');
   await rm(actual, { recursive: true, force: true });
 }
 await import('./context-ir-process-smoke.mjs');
+await import('./video-batch-process-smoke.mjs');

@@ -10,3 +10,5 @@ export { submit } from '../jobs/submit.js';
 export { resume, attachTask } from '../jobs/resume.js';
 export { listJobs, readJob } from '../jobs/store.js';
 export { normalizeText } from '../story/text.js';
+export { createBatchPlan, batchStatus, loadBatch } from '../jobs/batch-store.js';
+export { runBatch } from '../jobs/batch.js';

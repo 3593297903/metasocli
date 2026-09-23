@@ -65,7 +65,9 @@ it('bounds read retries, honors Retry-After, and preserves pending state on poll
   expect(deferred.lastError?.code).toBe('QUERY_DEFERRED'); expect(deferred.status).toBe('running');
 });
 it('unknown, failure and cancellation never masquerade as success', async () => {
+  const runtime = process.env.METASO_RUNTIME_DIR!;
   for (const state of ['unknown', 'failed', 'cancelled'] as const) {
+    process.env.METASO_RUNTIME_DIR = join(runtime, state); // Independent provider scenarios, not three projects sharing one account ledger.
     const f = await setup(); f.client.observe = async () => ({ taskId: 'task-1', status: state, rawStatus: state, evidence });
     const result = await resume(f.root, f.job.operationId, { client: f.client, fetcher: async () => { throw new Error('must not download'); } });
     expect(result.status).toBe(state === 'unknown' ? 'query_unknown' : state); expect(result.output).toBeUndefined();
