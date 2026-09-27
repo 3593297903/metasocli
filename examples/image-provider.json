@@ -1,0 +1,22 @@
+{
+  "backend": "api",
+  "provider": "yiciyuang",
+  "origin": "https://api.yiciyuang.com",
+  "model": "gpt-image-2.5",
+  "quality": "medium",
+  "n": 1,
+  "response_format": "url",
+  "submissionMode": "all-ready",
+  "boardSize": "1920x1088",
+  "firstFrameSize": "1088x1920",
+  "sizes": {},
+  "downloadConcurrency": 2,
+  "decodeConcurrency": 2,
+  "registrationConcurrency": 1,
+  "generationTimeoutMs": 600000,
+  "automaticPostRetries": 0,
+  "quotaGroup": "yiciyuang-default",
+  "maxResponseBytes": 47185920,
+  "maxImageBytes": 31457280,
+  "maxTempBytes": 34359738368
+}

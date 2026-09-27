@@ -5,7 +5,7 @@ description: 为 metasocli 按完整人物多视图、场景空间、道具结�
 
 # 参考图片准备
 
-由 `metasocli`、`metasocli-video-prompts` 或 `metasocli-video-prompts-旁白` 在同一任务中调用；也可以针对已有故事和明确的图片请求单独调用。使用宿主原生生图或用户指定的现有图片，H3 只负责后续视频。所有模板、校验器和登记命令都来自本包，不读取旧 Skill、不调用 LibTV 补图。
+由 `metasocli`、`metasocli-video-prompts` 或 `metasocli-video-prompts-旁白` 在同一任务中调用；也可以针对已有故事和明确的图片请求单独调用。图片后端默认使用 api（创艺坊 gpt-image-2.5），无需用户额外写“使用 API 生图”；当前任务明确指定的后端优先，built_in（宿主原生）仅在用户明确选择时使用。也可复用用户指定的现有图片。H3 只负责后续视频。所有模板、校验器和登记命令都来自本包，不读取旧 Skill、不调用 LibTV 补图。
 
 ## 素材边界与必读资料
 
@@ -22,7 +22,7 @@ description: 为 metasocli 按完整人物多视图、场景空间、道具结�
 
 ## 第一阶段：配方，先于导入与生图
 
-上游按交接契约保存 `reference-image-request.json`，包含 `sourceFacts`、外观、连续性、依赖及 `requiredBySegments`；逐集处理，共享素材保持同一 ID。读取当前故事的 `metasocli.yaml` 与 `assets list --root <story>`，按精确 ID、已登记配方、实际文件及哈希判断。已有故事缺失的文件先恢复；不能仅凭文件名相近复用。
+上游按交接契约保存 `reference-image-request.json`，包含 `sourceFacts`、外观、连续性、依赖及 `requiredBySegments`；逐集保存交接记录，但先收齐本次全部集/段的配方并完成导入，再一次建立 API 图片范围；共享素材保持同一 ID。读取当前故事的 `metasocli.yaml` 与 `assets list --root <story>`，按精确 ID、已登记配方、实际文件及哈希判断。已有故事缺失的文件先恢复；不能仅凭文件名相近复用。
 
 1. 已登记且 `ready` 的准确素材返回 `reused`，不重新编写或套模板覆盖原配方。用户明确提供的图片先用其准确 ID 声明配方并以 `--provenance user` 登记，再按已验证文件复用。
 2. 缺失且必需的素材返回 `planned`：本技能根据完整类型模板、上游事实和指定依赖，组织一份完整生图提示词，保存原样文本及规范化 SHA-256。普通未指定外观明确为生成设定，不冒充原文事实或编造伤痕、测量数据和归属。
@@ -39,9 +39,31 @@ python -B scripts/validate_handoff.py recipe <recipe.json> --request <request.js
 
 第一条核对素材与本集的实际引用/依赖，第二条还核对传入 CLI 的完整配方，防止中间摘要、改名或漏绑定。CLI 随后执行 `import --root <story> --draft <draft.json>`。若宿主没有 Python，按同一契约核对并明确说明未运行确定性校验，不因此增加新的批准环节。校验通过不代替对原文语义的完整阅读。
 
-## 第二阶段：原样生图与登记
+## 后端选择与 API 全量提交
 
-导入后重新读取状态；仅对仍缺失的 `planned` 必需项调用宿主原生生图。读取当前可用的 `imagegen` Skill，**一份独立素材一次调用**，把已保存的完整提示词原样交给工具，仅允许 BOM/换行规范化，不能再做缩写或第二次优化。依赖图片先准备，声明其身份、风格或布局角色并传入真实文件；示例图不提供本故事的人名、服装或剧情。
+沿用当前任务明确指定的后端；未指定时默认 api，不再询问后端选择。历史图片的 generationMode 不决定新任务的后端；已有图片、冻结计划和未完成请求仍按原身份复用或恢复。API 模式完整读取 [图片 API 实际用法](../../docs/IMAGE_API_USAGE.md)，使用独立图片凭据，禁止拿 METASO_API_KEY 或视频生成授权冒充图片供应商授权。缺少图片凭据时先完成素材分析、交接、导入和图片计划，报告需配置图片 Key，不自动调用宿主生图兜底。默认后端不扩大付费授权：仅有离线实施授权时停在图片 plan，不执行 run；已经明确授权供应商及冻结范围时直接执行，不逐图询问。
+
+先完成所有选中集的 request/recipe 校验与 import，再运行：
+
+```text
+node <package-root>/dist/cli/main.js images plan --root <story> --episodes <有序集ID> --profile <无密钥配置.json> --submission-mode all-ready
+node <package-root>/dist/cli/main.js images run --root <story> --plan <imagePlanId> --confirm
+node <package-root>/dist/cli/main.js images status --root <story> --plan <imagePlanId>
+```
+
+部分段改用 `--selection <json>`；范围参数互斥。计划明确列出复用、首轮可发、依赖等待、规格冲突和请求数量。已有原文要求 2K/4K 而默认尺寸不满足时，选择文档支持且符合原要求的显式 size，不能改短原配方或删除规格文字。人物/场景/道具默认横板 1920x1088，竖首帧 1088x1920；均不冒充 2K/4K 或精确数学比例。
+
+API 模式把所有 ready 输入集中发出，每素材 n=1；200 个独立 ready 项就是 200 次独立请求。依赖等待的是实际参考文件，不是生成槽位；登记后立即解锁下游。下载默认2、解码2、登记1，不限制 ready 生成启动。已知账户限额不足会在 POST 前阻止整次启动；供应商真实容量未知时明确说明未验证。
+
+CLI 自动保存完整回执、下载原文件、检查格式/大小并按条件登记。用 `images status` 的逐项文件和 `.metasocli/image-runs/<planId>-index.md` 展示首次结果；不做审美验收、OCR、自动重画或逐图确认。保存 1.1.0 API result 交接，使用每项 `.metasocli/image-receipts/<operationId>/execution.json` 与其实际文件 SHA-256，核对 requestedModel 来自请求、reportedModel 来自回执；缺报就填 null，不能推断底层型号。运行 result 校验器；CLI 已正式登记的同一文件无需再次 assets register。
+
+`images resume` 可继续原授权内尚未提交项；`images recover` 仅恢复已有结果。同步 HTTP 断线且无完整回执是未知，不可凭本地 operationId 查询供应商或重 POST；按实际用法执行明确的人工关联/证据解除/新尝试授权。不得自动退回 built_in、换模型、重画 ready 图或清空账本。旁白不进入图片计划或 edits 文件。
+
+全部必要图 ready 后核对 `<planId>-video-check.json`，排除 H3 九图/64 MiB/旁白组合冲突；返回原入口重新创建 H3 inline 视频计划/四并发批次，仍服从独立的视频生成授权。旧视频 task_id 可继续查询下载。
+
+## 第二阶段：built_in 原样生图与登记
+
+本节仅在当前任务明确选择 built_in 时执行；默认 api 使用上节的全量提交与自动登记。导入后重新读取状态；仅对仍缺失的 `planned` 必需项调用宿主原生生图。读取当前可用的 `imagegen` Skill，**一份独立素材一次调用**，把已保存的完整提示词原样交给工具，仅允许 BOM/换行规范化，不能再做缩写或第二次优化。依赖图片先准备，声明其身份、风格或布局角色并传入真实文件；示例图不提供本故事的人名、服装或剧情。
 
 保存并展示首次返回图片。用户判断是否满意；本流程不进行额外视觉检查、OCR、评分、自动退图、自动重画或逐图确认。工具使用规则仍适用；这条限定图片返回后的审美复核与重画。原生调用失败时先恢复已有输出和登记；确实没有文件则标记失败，报告缺图并继续独立项，不自动再调用生图或切换到旧平台。
 

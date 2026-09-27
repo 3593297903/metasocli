@@ -8,6 +8,7 @@ import type { GenerationPlan } from '../contracts/plan.js';
 import { fetchMedia, type Fetch } from '../metaso/transport.js';
 import { MAX_AUDIO_BYTES } from '../assets/audio.js';
 import { MAX_IMAGE_BYTES } from '../assets/image.js';
+import { assertNoImageStage } from '../images/phase.js';
 
 export async function operationKind(root: string, operationId: string): Promise<'ir' | 'video'> {
   const ir = await exists(await irOperationPath(root, operationId)), video = await exists(await jobPath(root, operationId));
@@ -17,6 +18,7 @@ export async function operationKind(root: string, operationId: string): Promise<
 }
 /** Caller owns the non-reentrant project lock. No lock acquisition or remote calls here. */
 export async function checkSubmissionConflicts(root: string, episodeId: string, segmentId: string, ignoreOperationId?: string) {
+  await assertNoImageStage(root);
   const [videos, irs] = await Promise.all([listJobs(root), listIrOperations(root)]);
   const ids = new Set(videos.map(j => j.operationId));
   if (irs.some(j => ids.has(j.operationId))) fail('OPERATION_CONFLICT', 'Operation ID exists in both task namespaces.');

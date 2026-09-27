@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { type Job } from '../contracts/job.js';
 import { parse } from '../contracts/story.js';
 import { type VideoBatchRun } from '../contracts/batch.js';
-import { fail, publicError } from '../core/errors.js';
+import { fail, publicError, isCode } from '../core/errors.js';
 import { readJson } from '../storage/io.js';
 import { projectPath, exists, samePath } from '../storage/paths.js';
 import { listJobs } from './store.js';
@@ -13,6 +13,7 @@ import { liveLease } from '../storage/locking.js';
 import { submissionLeasePath } from './submission-owner.js';
 import { batchStatus, loadBatch, loadBatchRun, saveBatchRun } from './batch-store.js';
 import { acquireScheduler, reconcileRuntime, runtimeDirectory, occupied, unsafeSlots, terminal } from './coordinator.js';
+import { acquireVideoStage } from '../images/phase.js';
 
 const Options = z.object({ maxPolls: z.number().int().min(1).max(720).default(60), pollIntervalMs: z.number().int().min(0).max(60000).default(5000),
   schedulerWaitMs: z.number().int().min(0).max(300000).default(30000) }).strict();
@@ -29,10 +30,14 @@ async function creationError(root: string, job: Job) {
 export async function runBatch(root: string, id: string, authorize: boolean, deps: BatchDependencies, input: Partial<z.infer<typeof Options>> = {}) {
   const options = parse(Options, input), plan = await loadBatch(root, id), runtime = runtimeDirectory(deps.runtimeRoot);
   const scheduler = await acquireScheduler(runtime, options.schedulerWaitMs);
+  let videoStage: Awaited<ReturnType<typeof acquireVideoStage>> | undefined;
   const now = deps.now ?? Date.now, sleep = deps.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const creates = new Map<number, Promise<void>>(), queries = new Map<string, Promise<void>>(), downloads = new Map<number, Promise<void>>();
   try {
     let run = await loadBatchRun(root, plan);
+    let imageStagePaused=false;
+    try{videoStage=await acquireVideoStage(root);}
+    catch(error){if(!authorize&&run&&isCode(error,'IMAGE_STAGE_ACTIVE'))imageStagePaused=true;else throw error;}
     if (!run) {
       if (!authorize) fail('GENERATION_NOT_AUTHORIZED', 'batch resume requires a saved authorization for this exact batch hash.');
       run = { schemaVersion: 1, batchId: id, batchHash: plan.batchHash, hash: '0'.repeat(64),
@@ -50,7 +55,7 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
     const handledFailures = new Set<string>();
     const createdThisRun = new Set<string>();
     const events: Event[] = [];
-    let halt = false, dispatchPaused = false;
+    let halt = imageStagePaused, dispatchPaused = false;
     const taskDeps = { ...deps, runtimeRoot: runtime, schedulerToken: scheduler.token, capacity: plan.concurrency, client: {
       create: deps.client.create.bind(deps.client),
       async query(taskId: string) {
@@ -69,6 +74,7 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
       state.trace.push({ at: new Date(now()).toISOString(), event, ...(order === undefined ? {} : { order }),
         ...(job ? { operationId: job.operationId } : {}), ...(detail ? { detail } : {}), ...(count === undefined ? {} : { occupied: count }) });
     };
+    if(imageStagePaused)trace('image-stage-pause',undefined,undefined,'Only original task IDs may query/download; new video submissions remain paused.');
     for (;;) {
       await scheduler.assertOwned();
       if (!creates.size) dispatchPaused = false;
@@ -211,6 +217,7 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
   } finally {
     // Drain already authorized in-flight I/O before relinquishing ownership on a local exception.
     await Promise.allSettled([...creates.values(), ...queries.values(), ...downloads.values()]);
+    await videoStage?.release();
     await scheduler.release();
   }
 }

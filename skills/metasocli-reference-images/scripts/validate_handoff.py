@@ -21,7 +21,7 @@ WINDOWS_DEVICE = re.compile(r"^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$",
 CONTROL_CHARACTER = re.compile(r"[\x00-\x1f\x7f]")
 KINDS = {"character", "scene", "prop", "first_frame"}
 STATUSES = {"generated", "reused", "skipped_optional", "blocked", "failed"}
-MODES = {"built_in", "not_run"}
+MODES = {"built_in", "not_run", "api"}
 PLACEHOLDERS = ("同上", "见前文", "见上文", "沿用前面", "待补充", "tbd", "todo")
 
 REQUEST_TOP_KEYS = {"schemaVersion", "episodeId", "modelPreference", "requireExactModel", "assets"}
@@ -365,8 +365,9 @@ def validate_sha(value: Any, label: str, *, nullable: bool = True) -> str | None
 def validate_result(raw: Any, request: dict[str, Any], recipe: dict[str, Any], project_root: Path | None) -> dict[str, Any]:
     result = require_object(raw, "result")
     require_exact_keys(result, RESULT_TOP_KEYS, "result")
-    if result["schemaVersion"] != "1.0.0":
-        raise ValidationError("result.schemaVersion must be 1.0.0")
+    if result["schemaVersion"] not in {"1.0.0", "1.1.0"}:
+        raise ValidationError("result.schemaVersion must be 1.0.0 or 1.1.0")
+    api_version = result["schemaVersion"] == "1.1.0"
     if result["episodeId"] != request["episodeId"]:
         raise ValidationError("result.episodeId does not match request")
     assets = result["assets"]
@@ -376,7 +377,7 @@ def validate_result(raw: Any, request: dict[str, Any], recipe: dict[str, Any], p
     for index, (raw_result, request_asset, recipe_asset) in enumerate(zip(assets, request["assets"], recipe["assets"], strict=True)):
         label = f"result.assets[{index}]"
         item = require_object(raw_result, label)
-        require_exact_keys(item, RESULT_ASSET_KEYS, label)
+        require_exact_keys(item, RESULT_ASSET_KEYS | ({"requestedModel", "executionRelativePath", "executionSha256"} if api_version else set()), label)
         if item["assetId"] != request_asset["assetId"] or item["kind"] != request_asset["kind"]:
             raise ValidationError(f"{label} identity does not match the request at the same position")
         status = item["status"]
@@ -409,7 +410,7 @@ def validate_result(raw: Any, request: dict[str, Any], recipe: dict[str, Any], p
                 raise ValidationError(f"{label}.recipeSha256 does not match generationPrompt")
             if normalize_prompt(prompt) != normalize_prompt(recipe_asset["generationPrompt"]) or recipe_hash != recipe_asset["recipeSha256"]:
                 raise ValidationError(f"{label} changed the planned generation recipe")
-            if mode != "built_in" or reason is not None:
+            if mode not in {"built_in", "api"} or reason is not None:
                 raise ValidationError(f"{label} generated execution metadata is inconsistent")
         elif status == "reused":
             if recipe_asset["status"] != "reused":
@@ -436,10 +437,18 @@ def validate_result(raw: Any, request: dict[str, Any], recipe: dict[str, Any], p
                 raise ValidationError(f"{label}.{status} must not claim an artifact")
             if status == "blocked" and mode != "not_run":
                 raise ValidationError(f"{label}.blocked must use not_run")
-            if status == "failed" and mode != "built_in":
+            if status == "failed" and mode not in {"built_in", "api"}:
                 raise ValidationError(f"{label}.failed must report the attempted generation mode")
             if recipe_asset["status"] not in {"planned", "blocked"}:
                 raise ValidationError(f"{label}.{status} is inconsistent with the recipe decision")
+
+        if mode == "api" and not api_version:
+            raise ValidationError("api mode requires result schemaVersion 1.1.0")
+        if api_version:
+            if mode == "api" and status == "generated":
+                validate_api_execution(item, project_root)
+            elif any(item[k] is not None for k in ("requestedModel", "executionRelativePath", "executionSha256")):
+                raise ValidationError("non-generated API metadata must not claim successful execution evidence")
 
         path_to_check = staged if status == "generated" else existing if status == "reused" else None
         if project_root is not None and path_to_check is not None:
@@ -448,6 +457,68 @@ def validate_result(raw: Any, request: dict[str, Any], recipe: dict[str, Any], p
             if observed != content_hash:
                 raise ValidationError(f"{label}.contentSha256 does not match the file")
     return result
+
+
+def canonical_hash(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def validate_api_execution(item: dict[str, Any], root: Path | None) -> None:
+    if root is None:
+        raise ValidationError("api results require a project root and persisted execution evidence")
+    op = item["operationId"]
+    path = validate_relative_path(item["executionRelativePath"], "executionRelativePath", nullable=False)
+    if path != f".metasocli/image-receipts/{op}/execution.json":
+        raise ValidationError("API execution path does not belong to this operation")
+    file = resolve_project_file(root, path, "execution")
+    if hashlib.sha256(file.read_bytes()).hexdigest() != validate_sha(item["executionSha256"], "executionSha256", nullable=False):
+        raise ValidationError("API execution hash changed")
+    execution = require_object(load_json(file), "execution")
+    if execution.get("provider") != "yiciyuang" or execution.get("operationId") != op or execution.get("assetId") != item["assetId"]:
+        raise ValidationError("API execution identity mismatch")
+    if item["requestedModel"] != "gpt-image-2.5" or execution.get("requestedModel") != item["requestedModel"]:
+        raise ValidationError("API requested model differs from execution")
+    if execution.get("reportedModel") != item["reportedModel"]:
+        raise ValidationError("API reported model differs from actual receipt")
+    job_path = f".metasocli/image-jobs/{op}.json"
+    if execution.get("jobPath") != job_path:
+        raise ValidationError("API job identity mismatch")
+    job_file = resolve_project_file(root, job_path, "job")
+    if hashlib.sha256(job_file.read_bytes()).hexdigest() != execution.get("jobSha256"):
+        raise ValidationError("API job file changed")
+    job = require_object(load_json(job_file), "job")
+    effective = require_object(job.get("input"), "effective input")
+    if job.get("operationId") != op or job.get("assetId") != item["assetId"] or job.get("status") != "registered":
+        raise ValidationError("API result lacks registered operation evidence")
+    if effective.get("origin") != "https://api.yiciyuang.com" or effective.get("model") != item["requestedModel"] or effective.get("n") != 1:
+        raise ValidationError("API effective request differs")
+    for key in ("requestHash", "inputHash", "planId", "planHash"):
+        if execution.get(key) != job.get(key):
+            raise ValidationError(f"API execution {key} differs from job")
+    if canonical_hash(effective) != job.get("requestHash") or canonical_hash({"fingerprint": job.get("fingerprint"), "input": effective}) != job.get("inputHash"):
+        raise ValidationError("API request/input hash mismatch")
+    prompt_file = resolve_project_file(root, validate_relative_path(effective.get("promptPath"), "prompt path", nullable=False), "prompt")
+    prompt = prompt_file.read_bytes()
+    if hashlib.sha256(prompt).hexdigest() != effective.get("promptHash") or prompt != normalize_prompt(item["generationPrompt"]):
+        raise ValidationError("API actual prompt was changed or shortened")
+    artifact = require_object(job.get("result"), "job result")
+    if artifact.get("sha256") != item["contentSha256"] or artifact.get("path") != item["stagedRelativePath"]:
+        raise ValidationError("API result asset binding differs")
+    if execution.get("requestedSize") != effective.get("size") or execution.get("width") != artifact.get("width") or execution.get("height") != artifact.get("height"):
+        raise ValidationError("API result dimensions differ from execution")
+    receipt_path = execution.get("receiptPath")
+    if receipt_path is None:
+        if not job.get("recoveredManually") or item["reportedModel"] is not None:
+            raise ValidationError("Missing API receipt requires disclosed manual recovery")
+    else:
+        if receipt_path != f".metasocli/image-receipts/{op}/receipt.json":
+            raise ValidationError("API receipt path differs")
+        receipt_file = resolve_project_file(root, receipt_path, "receipt")
+        if hashlib.sha256(receipt_file.read_bytes()).hexdigest() != execution.get("receiptSha256"):
+            raise ValidationError("API receipt file changed")
+        receipt = load_json(receipt_file)
+        if receipt.get("operationId") != op or receipt.get("requestHash") != job.get("requestHash") or receipt.get("reportedModel") != item["reportedModel"] or receipt.get("requestedModel") != item["requestedModel"]:
+            raise ValidationError("API model evidence not supported by receipt")
 
 
 def resolve_project_file(project_root: Path, relative_path: str, label: str) -> Path:

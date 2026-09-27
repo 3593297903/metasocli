@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 // Every network request in the suite must be explicitly injected. This cannot generate paid jobs.
+export const nativeFetch = globalThis.fetch;
 vi.stubGlobal('fetch', async () => { throw new Error('Unexpected network request in offline tests'); });
 let runtime: string, previous: string | undefined;
 beforeEach(async () => {

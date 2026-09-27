@@ -51,3 +51,7 @@
 - GET https://metaso.cn/api/minimax/v2/query/video_generation/{task_id}
 
 MiniMax 官方文档用于核对模型契约，不能将 MiniMax 官方密钥与 Metaso 密钥混用。第三方接口会变化，开始实现适配时再核对支持范围；尚未执行本项目的真实生成验收。
+
+## 2026-09-24 图片 API 来源记录
+
+src/images/* 为本项目新增实现，没有从 E:\libcli 动态导入或新增复制代码。独立 credentials.ts 与 connect-image-local.mjs 复用本项目现有 Metaso 凭据/loopback 脚本模式，分离环境变量、文件及批准 origin；原视频凭据模块/连接脚本不变。旧图片模板保持原内容，增量扩展本项目图片 Skill、交接校验器和三个入口说明。供应商接口依据公开专属文档，实际 URL、多文件字段及型号/容量限制的验证等级见图片 API 实施报告。

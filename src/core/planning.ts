@@ -14,6 +14,7 @@ import { IrReview, type ContextIrOperation, type ContextIrReview } from '../cont
 import { buildIrRequest, deriveRequest, irInputHash, validateEnhancedText } from '../metaso/context-ir.js';
 import { irPersistence, irReviewPath, readIrOperation, readIrPrompt, readIrReview } from '../jobs/context-ir-store.js';
 import { operationKind } from '../jobs/submission-guard.js';
+import { assertNoImageStage } from '../images/phase.js';
 
 async function requests(root: string, story: Story, episodeId: string, inlineIr = false) {
   const episode = story.episodes.find(e => e.id === episodeId);
@@ -38,6 +39,7 @@ export async function createPlan(root: string, episodeId: string, workflow: 'h3-
   parse(Id, episodeId);
   if (workflow !== 'h3-inline-ir' && workflow !== 'h3-context-ir') fail('PLAN_WORKFLOW', 'Unknown workflow.');
   return withProjectLock(root, async () => {
+    await assertNoImageStage(root);
     const story = await loadStory(root);
     const built = await requests(root, story, episodeId, workflow === 'h3-inline-ir');
     if (workflow === 'h3-context-ir') for (const base of built) buildIrRequest(base.request);
@@ -135,6 +137,7 @@ const derivedPersistence: DerivedPlanPersistence = {
 export async function createPlanFromContextIr(root: string, operationId: string, input: unknown, disk: DerivedPlanPersistence = derivedPersistence): Promise<GenerationPlan> {
   const review = parse(IrReview, input), reviewHash = canonicalSha256(review);
   return withProjectLock(root, async () => {
+    await assertNoImageStage(root);
     await operationKind(root, operationId);
     const operation = await readIrOperation(root, operationId), parent = await loadPlan(root, review.preparePlanId);
     if (parent.workflow?.stage !== 'prepare') fail('IR_PREPARE_REQUIRED', 'IR video plans require a preparation parent.');

@@ -6,6 +6,8 @@
 
 2026-09-23 已重新构建并通过完整离线检查，见 [上传前核验](docs/UPLOAD_VERIFICATION_20260923.md)。
 
+2026-09-24 图片准备默认使用独立创艺坊 `gpt-image-2.5` API，未指定后端时不再询问；用户明确选择时仍可使用宿主原生生图。先收齐本次全部集/段的配方与导入，再集中提交全部 ready 项，真实图片依赖就绪后立即解锁；下载/解码各2、登记1。视频四并发保持不变。使用独立图片 Key，真实供应商容量需按实际账户验证。见 [图片 API 用法](docs/IMAGE_API_USAGE.md) 和 [实施报告](docs/IMAGE_API_INTEGRATION_IMPLEMENTATION_REPORT.md)。
+
 ## 构建与本地运行
 
 需要 Node.js 24+。在本项目执行：
@@ -48,13 +50,13 @@ $metasocli-video-prompts-旁白
 
 音频只参考音色、语气、咬字、节奏与情绪，不复述示例台词、不把整条 MP3 铺到视频中。未授权包含 IR 的视频生成时，完成音频登记、参考图与本地计划后暂停。完整提示词、技术旁白说明、图片和音频一并进入启用 IR 的视频请求，不改原旁白 cues。详见 [旁白 Skill](skills/metasocli-video-prompts-旁白/SKILL.md) 与 [音频草稿契约](docs/INPUT_FORMAT.md#可选的统一旁白参考)。
 
-两个成品提示词入口及剧本入口共同调用 [metasocli-reference-images](skills/metasocli-reference-images/SKILL.md)，不必另发一次生图指令。该图片 Skill 已独立带入完整的人物多视图板、场景空间结构板、道具结构材质板和单幅首帧模板：先保存完整配方，再原样交给宿主原生生图，保存展示首次图片并登记。人物按一人一套造型建立身份，图片仅分配给需要它的段；已登记且哈希一致的素材直接复用。用户明确提供的已有图片不因模板升级而自动重画。
+两个成品提示词入口及剧本入口共同调用 [metasocli-reference-images](skills/metasocli-reference-images/SKILL.md)，不必另发一次生图指令。该图片 Skill 已独立带入完整的人物多视图板、场景空间结构板、道具结构材质板和单幅首帧模板：先保存本次全部范围的完整配方，默认通过 api 集中执行；仅在用户明确选择时使用 built_in。保存展示首次图片并登记。人物按一人一套造型建立身份，图片仅分配给需要它的段；已登记且哈希一致的素材直接复用。用户明确提供的已有图片不因模板升级而自动重画。
 
 在本仓库也可单独调用 `$metasocli-reference-images`，指定已有故事目录和需要准备的素材；它会先核对上游图片请求和状态，不生成视频。跨项目使用上述两个用户级视频入口时，会按链接读取同一套图片技能和模板，无需再安装旧图片 Skill。模板与校验器均在本项目内，运行不依赖 LibTV。
 
 图片交接校验器使用 Python 3.10+ 标准库，检查素材/段落分配、完整配方传递、文件哈希和暂存路径；它不做视觉评分或保证出图外观。先 `npm run build`，再 `npm run test:image-skill` 可运行离线交接及 CLI 登记/计划检查；Node CLI 本身不依赖 Python。没有生成新图片或提交视频的测试，不等于真实图片/视频效果验收。
 
-外部 `gpt-image-2.5` 生图 API 目前仅完成 [接入分析](docs/IMAGE_API_INTEGRATION_ANALYSIS.md)，尚未实现请求客户端、图片并发队列或付费验收；当前图片执行方式仍为宿主原生生图或已有图片导入。
+未指定图片后端时按默认 `gpt-image-2.5` API 准备，使用 `all-ready`；图片 Key 未配置时完成离线图片计划并报告缺项，不自动切回宿主生图。默认后端不扩大付费授权，API 生成仍须在用户已授权的供应商与范围内执行；视频未授权时继续停在视频提交前。凭据配置及真实接口验收边界见 [图片 API 用法](docs/IMAGE_API_USAGE.md)。
 
 ## 两个离线入口
 
@@ -80,7 +82,7 @@ node $cli import --root $story --draft E:\metasocli\examples\script.draft.json
 node $cli plan --root $story --episode ep-script --workflow h3-inline-ir
 ```
 
-[草稿契约与多图示例](docs/INPUT_FORMAT.md)说明来源范围、完整台词校验、图片配方及引用。CLI 直接读取 UTF-8 TXT/Markdown；不自动创作分镜或解析 DOCX/PDF。Skill 负责宿主中的内容编排与原生图片准备。
+[草稿契约与多图示例](docs/INPUT_FORMAT.md)说明来源范围、完整台词校验、图片配方及引用。CLI 直接读取 UTF-8 TXT/Markdown；不自动创作分镜或解析 DOCX/PDF。Skill 负责宿主中的内容编排与默认 API 图片准备。
 
 省略 `--workflow` 也默认使用 `h3-inline-ir`，计划记录 `workflow.stage: inline-video` 和每段 `contextIr:true`。历史清单、计划和任务不自动修改；即使旧清单写 false，重新 plan 得到的实际请求也明确为 true。不要手改旧计划的开关或哈希；已有任务用 resume，新的生成对原始集重新 plan。
 
@@ -186,3 +188,17 @@ JSON 是默认输出，`--json` 可选。退出码：0 已完成本次动作；1
 尾帧、参考视频、多音频或角色对白声线配置、完整旧项目转换、DOCX/PDF 解析、用户级 Skill 安装器、MCP 和常驻后台服务未开放。新项目只单向复制明确提供的原文、图片或旁白录音；不接管旧目录、旧命令或账户。
 
 设计与来源：[AGENTS.md](AGENTS.md)、[ARCHITECTURE.md](docs/ARCHITECTURE.md)、[源码复制记录](docs/SOURCE_MANIFEST.json)、[移植说明](docs/MIGRATION_NOTES.md)。
+
+## 图片 API 全量启动
+
+所有准备和 plan 均离线。以下 run 只在获得独立图片供应商及冻结范围的明确授权后执行；本次实施没有授权真实生成。
+
+```powershell
+node .\dist\cli\main.js images plan --root <story> --episodes ep-1,ep-2 --profile .\examples\image-provider.json --submission-mode all-ready
+node .\dist\cli\main.js images run --root <story> --plan <imagePlanId> --confirm
+node .\dist\cli\main.js images status --root <story> --plan <imagePlanId>
+node .\dist\cli\main.js images resume --root <story> --plan <imagePlanId>
+node .\dist\cli\main.js images recover --root <story> --operation <operationId>
+```
+
+images resume 可继续原授权内未提交项；recover 只恢复原结果，不创建。未知同步请求不重发，不虚构 task_id 查询。200 请求实际到达的离线验收不代表供应商可接收200并发。凭据、返回索引、人工处理及规格/磁盘限制见 [完整说明](docs/IMAGE_API_USAGE.md)。新测试命令：`npm run test:image-api`、`npm run test:image-api:process`。

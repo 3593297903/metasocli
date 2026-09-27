@@ -6,7 +6,7 @@
 
 本机已经用户授权，将 `$metasocli-video-prompts` 和 `$metasocli-video-prompts-旁白` 两个入口另外安装到用户级 Skill 目录，因此可在 `mttest1` 等其他项目调用。两个入口仍读取本项目正文并使用本机程序；原 Skill、旧 CLI 及全局配置文件不被覆盖。2026-09-21 起三个入口默认使用 `plan --workflow h3-inline-ir`，完成素材与离线计划后停在视频提交前。用户授权当前范围及包含 IR 的视频模式后直接 generate；真实视频请求明确带 `context_ir_enabled:true`，不先单独创建 IR。已授权范围不逐段再问。见 [当前流程](docs/INLINE_CONTEXT_IR_WORKFLOW.md)。本次切换仅做离线验证，不发起付费生成。
 
-两个入口会自动调用本包 `$metasocli-reference-images`。现已带入完整人物/场景/道具/首帧模板，先形成并校验完整配方，导入后只为缺失必需素材原样调用宿主生图，再正式登记。无需在新视频任务中单独再调用图片 Skill；现有故事和图片不会因模板更新自动被改写。
+两个入口会自动调用本包 `$metasocli-reference-images`。图片默认使用创艺坊 `gpt-image-2.5` API，无需额外指定后端；先形成并校验本次全部集/段的完整人物/场景/道具/首帧配方，全部导入后通过 `all-ready` 集中生成缺失必需素材并自动登记。用户明确选择时可使用宿主原生生图。缺少图片 Key 时继续离线准备并报告缺项，不自动换后端。无需在新视频任务中单独再调用图片 Skill；现有故事和图片不会因模板更新自动被改写。
 
 在 Codex 左侧选择 `metasocli`，新建一个聊天/任务，选择直接使用 `E:\metasocli` 的本地模式。新任务会获得这个项目的工作目录与上下文。可将下面的消息作为开场：
 
@@ -23,3 +23,7 @@
 ```
 
 项目约束由 AGENTS.md 统一维护；上述开场消息只是将本次讨论的目标交给新任务。
+
+## 2026-09-24 图片 API 增量
+
+图片准备默认使用独立 yiciyuang/gpt-image-2.5 API，built_in 保留为用户明确选择的方式。先读 [实际用法](docs/IMAGE_API_USAGE.md) 和 [实施报告](docs/IMAGE_API_INTEGRATION_IMPLEMENTATION_REPORT.md)。全部 ready 输入采用 all-ready，不沿用视频四个生成名额；视频、旁白、时长适配和原计划哈希语义保留。图片 Key 独立，默认后端不扩大付费授权，在未授权的付费阶段前暂停。默认规则修改不发起真实生成或覆盖任何全局安装。

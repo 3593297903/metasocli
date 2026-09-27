@@ -11,7 +11,7 @@ description: 将完整剧本导入独立 metasocli，准备参考素材和显式
 1. 完整读取剧本。读取同包 `../metasocli-prompt-engine/SKILL.md` 形成分段草稿；完整台词、说话人及顺序不可遗漏。
 2. `init --root <story> --name <name>`；已有根先 `status --root <story>`。旧故事或旧源码只做明确的单向文件复制导入，不能原地初始化。
 3. 依据 [草稿契约](../../docs/INPUT_FORMAT.md) 创建 JSON；`duration` 可写原始目标秒数（如 `12.378`），程序自动向上取整为 H3 请求时长 13 秒并保留目标字段。正常小数适配不逐段确认，不修改台词、图片或旁白。由同包 `../metasocli-reference-images/SKILL.md` 第一阶段整理完整类型模板配方，原样写入 recipes 并校验交接后，执行 `import --root <story> --draft <json>`。原始文件字节、规范文本和段落范围由 CLI 保存。
-4. 执行该图片 Skill 第二阶段，仅准备缺失必需图片并用 `assets register` 正式登记。`assets list` 返回 missing/changed 时明确定位，先恢复真实文件；不能凭文件名猜绑定，也不将多人合并成单一人物身份资产。
+4. 完成本次全部集/段的配方校验与导入后，默认执行该图片 Skill 的 API 全量提交与自动登记；仅在用户明确选择 built_in 时执行宿主生图阶段及 `assets register`。只准备缺失必需图片，API 已登记的文件不重复登记。`assets list` 返回 missing/changed 时明确定位，先恢复真实文件；不能凭文件名猜绑定，也不将多人合并成单一人物身份资产。
 5. 新草稿段参数 `contextIr` 写 true，执行 `plan --root <story> --episode <id> --workflow h3-inline-ir`。核对所有计划段的 `contextIr:true`、完整正文、原始目标与实际时长、模型、清晰度、有效比例及引用顺序。默认 H3、768P、文字/参考图 9:16；首帧有效比例 adaptive。历史清单可保持原值，新计划独立记录实际 inline 参数。
 6. 完整读取并执行 [当前 Context IR 流程](../../docs/INLINE_CONTEXT_IR_WORKFLOW.md) 和下文批次规则。默认交付素材与离线批次计划后停在视频提交前，说明本次视频生成包含 IR 费用。用户授权当前范围及此模式后，直接 `batch run --root <story> --batch <batchId> --confirm`，不逐段或每4段再次询问。真实视频 POST 每段必须携带布尔值 `context_ir_enabled:true`，不先执行独立 context-ir 或 plan --from-context-ir。
 7. 提交前核对原文台词、说话人、镜头动作、图序与旁白归属，保持完整文本和素材；不提前改写、摘要或翻译提示词。IR 在 Metaso 视频请求内完成，没有独立增强文本可先行审阅，不编造 review 或服务器返回的 true。
@@ -28,3 +28,11 @@ description: 将完整剧本导入独立 metasocli，准备参考素材和显式
 调度器最多占用4个生成名额，任一已验证终态落盘后补下一段；收到 task_id 不释放名额。下载最多2个并行，慢下载不阻塞生成补位。不要通过多个终端、不同运行目录或手工循环 generate 绕开安装内共享名额。其他批次等待当前调度器，等待超时保留范围，稍后恢复。
 
 中断后 `batch status --root <story> --batch <batchId>` 只读本地记录；`batch resume --root <story> --batch <batchId>` 使用保存的授权，可继续该范围内尚未提交的段，接回活动任务并复用合格成片。旧 `resume --operation`、`status`、`download` 始终不创建新任务。未知提交保留占位并停止新增；已知任务继续查询和下载。仅明确未受理且无 task_id 的429按批次预算有限退避；明确失败段不自动付费重做。记录缺失、身份冲突、素材变化或账号问题需如实报告，不能清除锁/占位来继续。
+
+## 图片后端统一选择
+
+本入口遵循 [参考图片 Skill](../metasocli-reference-images/SKILL.md) 的同一后端规则：未指定时默认 api（创艺坊 gpt-image-2.5），不再询问后端选择；当前任务明确指定的后端优先，built_in 仅在用户明确选择时使用。默认 API 先完成本次全部集/段的完整素材配方、映射、校验与 import，再建立一个 all-ready 图片计划，不自动变回分析一集、生成一集。共享 ready 图按真实哈希复用，旁白始终单独登记，只有有旁白的段绑定原音频。缺少图片 Key 时完成离线图片计划并报告缺项，不自动切回宿主生图；历史任务仍按原计划和回执恢复。
+
+API 图片授权必须覆盖该供应商及冻结范围；仅调用本入口不自动扩大为新的付费图片授权。已明确授权后使用 images run，不逐图批准。全部 ready 项独立全量启动，真实图片依赖登记后立即解锁；图片下载/解码默认各2、登记1，视频仍最多4段生成和2个下载。不存在图片四槽位补位。完整提示词、原图序和时长规则不变。
+
+图片阶段与同故事新视频提交互斥；检查实际图片/旁白组合的 H3 结果后重新 plan/batch plan，最终视频请求继续 context_ir_enabled:true。未知图片提交不重发，恢复含义与人工处理见 [图片 API 用法](../../docs/IMAGE_API_USAGE.md)。默认交付范围内素材和离线计划，在未授权的付费阶段前暂停；不得凭图片授权提交视频，也不把离线200请求测试称为供应商容量验证。

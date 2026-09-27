@@ -10,7 +10,7 @@ $prefix = Join-Path $testRoot 'prefix'
 $cache = Join-Path $projectRoot '.npm-cache'
 $originalLocation = Get-Location
 $savedEnvironment = @{}
-foreach ($name in @('PATH','USERPROFILE','HOME','APPDATA','METASO_API_KEY')) { $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name,'Process') }
+foreach ($name in @('PATH','USERPROFILE','HOME','APPDATA','METASO_API_KEY','METASOCLI_IMAGE_API_KEY')) { $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name,'Process') }
 function Invoke-Npm([string[]]$Arguments) {
   & $nodePath $npmPath @Arguments --registry $registry
   if ($LASTEXITCODE -ne 0) { throw "npm failed: $($Arguments[0])" }
@@ -24,6 +24,7 @@ try {
   $env:HOME = $env:USERPROFILE
   $env:APPDATA = Join-Path $testRoot 'appdata'
   [Environment]::SetEnvironmentVariable('METASO_API_KEY',$null,'Process')
+  [Environment]::SetEnvironmentVariable('METASOCLI_IMAGE_API_KEY',$null,'Process')
   if (Get-Command story2libtv,libtv -ErrorAction SilentlyContinue) { throw 'Old CLI unexpectedly visible in isolated PATH' }
   Set-Location -LiteralPath $sourceRoot
   Invoke-Npm @('ci','--offline','--ignore-scripts','--cache',$cache)
@@ -45,7 +46,7 @@ try {
     if ($pack.files.path -notcontains "skills/metasocli-reference-images/references/$reference") { throw "Missing image Skill template/contract: $reference" }
   }
   if ($pack.files.path -notcontains 'skills/metasocli-reference-images/scripts/validate_handoff.py') { throw 'Missing image Skill handoff validator' }
-  foreach ($file in @('docs/CONTEXT_IR_WORKFLOW.md','dist/jobs/context-ir.js','dist/contracts/context-ir.js')) {
+  foreach ($file in @('docs/CONTEXT_IR_WORKFLOW.md','dist/jobs/context-ir.js','dist/contracts/context-ir.js','dist/images/run.js','dist/images/client.js','docs/IMAGE_API_USAGE.md','scripts/connect-image-local.mjs')) {
     if ($pack.files.path -notcontains $file) { throw "Missing independent IR package resource: $file" }
   }
   $sentinels = @('story2libtv.cmd','node_modules/story-to-libtv/package.json','.codex/config.toml','.story2libtv-runtime/owner.json')

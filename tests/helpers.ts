@@ -12,14 +12,15 @@ export async function fixture(text = '林舟：我会把每一句台词完整说
 }
 export async function imported(text?: string) { const f = await fixture(text); await importStory(f.root, f.draft); return f; }
 export async function cleanup() { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); }
-export function png(width = 256, height = 256): Buffer {
+export function png(width = 256, height = 256, color = 0): Buffer {
   function chunk(name: string, data: Buffer) {
     const body = Buffer.concat([Buffer.from(name), data]); let crc = 0xffffffff;
     for (const n of body) { crc ^= n; for (let j = 0; j < 8; j++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0); }
     const result = Buffer.alloc(data.length + 12); result.writeUInt32BE(data.length); body.copy(result, 4); result.writeUInt32BE((crc ^ 0xffffffff) >>> 0, result.length - 4); return result;
   }
   const header = Buffer.alloc(13); header.writeUInt32BE(width); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 2;
-  return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk('IHDR', header), chunk('IDAT', deflateSync(Buffer.alloc(height * (width * 3 + 1)))), chunk('IEND', Buffer.alloc(0))]);
+  const pixels=Buffer.alloc(height*(width*3+1),color);for(let y=0;y<height;y++)pixels[y*(width*3+1)]=0;
+  return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk('IHDR', header), chunk('IDAT', deflateSync(pixels)), chunk('IEND', Buffer.alloc(0))]);
 }
 export function mp4(duration = 6): Buffer {
   function box(name: string, body: Buffer) { const h = Buffer.alloc(8); h.writeUInt32BE(body.length + 8); h.write(name, 4); return Buffer.concat([h, body]); }

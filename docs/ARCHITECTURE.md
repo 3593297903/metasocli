@@ -169,3 +169,11 @@ CLI 退出后本地轮询会停止，远端已经接受的任务可能继续运�
 - [成品提示词入口的 LibTV 补图依赖](E:/libcli/.story2libtv-work/video-prompt-entry-0.2.22-20260916/source/skills/video-prompt-to-libtv/SKILL.md:44)
 - [Metaso 提供的插件源码](https://metaso.cn/minimax-h3/new-api-guide/minimax-h3-metaso.plugin.js)
 - [H3 查询协议](https://platform.minimax.cn/docs/api-reference/video-generation-v2-query)
+
+## 2026-09-24 独立图片 API
+
+新增 src/images 的契约、计划、凭据、HTTP、流式接收、协调、登记和恢复模块，详见 [实际用法](IMAGE_API_USAGE.md)。图片计划冻结资产配方/原提示词文件哈希、原目标哈希、有序依赖及 profile；不依赖全局 revision 相等，保留旧 Story/Recipe/视频 Plan/Job 哈希语义。待生成的上游冻结生产身份，真正发送 edits 前解析已登记图片哈希。
+
+图片 quotaGroup 的 scheduler 控制单个活动运行进程，ledger 记录每个请求，进程内不限制 ready 生成数。共享图片账本锁在项目短写锁之前；不同时持有图片和视频协调锁。登记条件在 registerAsset 的同一项目短事务内检查；网络不持项目锁，下载2、解码2、登记1。项目 image-stage.json 持久化阶段，未知请求不因进程死亡解除；视频批次持有 video-stage.lock，新视频提交同锁内检查图片阶段，原 task_id 的查询下载不受影响。
+
+先保存 prepared，再逐项保存 submitting 后立即调用 HTTP，不能把预留冒充已发送。响应体立即按 operationId 流式落盘，complete.json 绑定请求、字节数和哈希，再进入有界解析队列。同步 API 没有任务查询契约；未知结果保留、禁止自动重试。完整原响应/URL/下载可恢复，用户换图后的旧输出保留 superseded，原文件不被覆盖。手动结果关联和解除未知必须保存请求绑定证据与明确确认，标识为用户提供的事实，不能冒充服务端独立认证。

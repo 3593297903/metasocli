@@ -213,6 +213,65 @@ class ImageHandoffTests(unittest.TestCase):
         with self.assertRaisesRegex(handoff.ValidationError, "substituted"):
             handoff.validate_result(result, request, recipe, None)
 
+    def test_api_execution_uses_real_job_and_receipt_evidence(self):
+        node = shutil.which("node")
+        self.assertTrue(node)
+        request, recipe, draft = fixture()
+        for item, planned in zip(draft["recipes"], recipe["assets"]):
+            item["prompt"] = "完整图片原文：" + item["assetId"]
+            planned["generationPrompt"] = item["prompt"]
+            planned["recipeSha256"] = hashlib.sha256(item["prompt"].encode()).hexdigest()
+        with test_directory() as temp:
+            root = temp / "story"
+            source = temp / "source.txt"
+            source.write_text("人物站在河岸河水静静流淌", encoding="utf-8")
+            draft["source"] = str(source)
+            draft_file = temp / "draft.json"
+            draft_file.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+            # Use the compiled implementation with a fake response, not invented execution records.
+            fake = temp / "fake.png"
+            def chunk(kind, payload):
+                return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload))
+            fake.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 1024, 1024, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress((b"\0" + b"\1\2\3" * 1024) * 1024)) + chunk(b"IEND", b""))
+            script = temp / "api-test.mjs"
+            script.write_text("\n".join([
+                f"import {{initializeStory,importStory}} from {json.dumps((ROOT/'dist/core/project.js').as_uri())};",
+                f"import {{createImagePlan}} from {json.dumps((ROOT/'dist/images/planning.js').as_uri())};",
+                f"import {{runImages}} from {json.dumps((ROOT/'dist/images/run.js').as_uri())};",
+                "import {readFile} from 'node:fs/promises';",
+                f"const root={json.dumps(str(root))}; await initializeStory(root,'API handoff test');",
+                f"await importStory(root,JSON.parse(await readFile({json.dumps(str(draft_file))},'utf8')));",
+                "const {plan}=await createImagePlan(root,{episodes:['ep-1'],profile:{boardSize:'1024x1024',maxResponseBytes:131072,maxImageBytes:65536,maxTempBytes:10485760}});",
+                f"const b64=(await readFile({json.dumps(str(fake))})).toString('base64');",
+                f"await runImages(root,plan.planId,true,{{runtimeRoot:{json.dumps(str(temp/'runtime'))},client:{{async create(){{return new Response(JSON.stringify({{data:[{{b64_json:b64}}],model:'response-only-alias'}}));}}}}}});",
+            ]), encoding="utf-8")
+            env = dict(os.environ)
+            env.pop("METASO_API_KEY", None)
+            env.pop("METASOCLI_IMAGE_API_KEY", None)
+            proc = subprocess.run([node, str(script)], cwd=ROOT, env=env, capture_output=True, text=True, encoding="utf-8", timeout=45)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            result = {"schemaVersion":"1.1.0", "episodeId":"ep-1", "assets":[]}
+            jobs = {j["assetId"]: j for j in (json.loads(f.read_text()) for f in (root/".metasocli/image-jobs").glob("*.json"))}
+            for planned in recipe["assets"]:
+                job = jobs[planned["assetId"]]
+                execution_path = f".metasocli/image-receipts/{job['operationId']}/execution.json"
+                execution_file = root / execution_path
+                result["assets"].append({"assetId":planned["assetId"], "kind":planned["kind"], "status":"generated",
+                    "operationId":job["operationId"], "stagedRelativePath":job["result"]["path"], "existingRelativePath":None,
+                    "contentSha256":job["result"]["sha256"], "generationPrompt":planned["generationPrompt"], "recipeSha256":planned["recipeSha256"],
+                    "generationMode":"api", "requestedModel":"gpt-image-2.5", "reportedModel":"response-only-alias", "reason":None,
+                    "executionRelativePath":execution_path, "executionSha256":hashlib.sha256(execution_file.read_bytes()).hexdigest()})
+            handoff.validate_result(result, request, recipe, root)
+            for field, value in [("requestedModel", "different-model"), ("reportedModel", "invented-model"), ("executionSha256", "0"*64)]:
+                invalid=copy.deepcopy(result)
+                invalid["assets"][0][field]=value
+                with self.assertRaises(handoff.ValidationError):
+                    handoff.validate_result(invalid, request, recipe, root)
+            invalid=copy.deepcopy(result)
+            invalid["schemaVersion"]="1.0.0"
+            with self.assertRaises(handoff.ValidationError):
+                handoff.validate_result(invalid, request, recipe, root)
+
     def test_offline_cli_import_registration_reuse_and_plan(self):
         node = os.environ.get("METASOCLI_TEST_NODE") or shutil.which("node")
         self.assertTrue(node, "Node 24+ is needed for the CLI smoke test")

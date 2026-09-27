@@ -145,8 +145,22 @@ No legacy handoff or QA records are imported. Do not clear historical problems, 
 3. `reused` 素材已在当前故事登记，可以不重复放入草稿 recipes；若放入，必须使用原配方，不能按新模板改写。`skipped_optional` 不生成，也不新增到草稿。`blocked` 先解决对应依赖，不擅自删掉段落引用来绕过阻塞。只针对当前集及其依赖生成请求；跨集共享资产使用同一 ID，并以项目状态复用。
 4. `request ... --draft <draft.json>` 检查本集段 ID、图片引用/依赖、是否必需及 requiredBySegments 的一致性。`recipe ... --request ... --draft ...` 还检查写进 CLI 的配方未被缩写、改序或改名。未指定 `--draft` 时仅做图片交接内部检查；实际导入前要带该参数。旁白配方不进入图片交接，检查器不改旁白字段。
 5. 调用 `node <package-root>/dist/cli/main.js import --root <story> --draft <draft.json>`。用清单和 `assets list` 确认实际落盘的配方与状态，再进入图片生成。既有尚未生成的简化配方也不能由图片 Skill 偷偷改写；向上游报告配方冲突，按用户授权修订素材 ID。
-6. 每个必要素材仅使用其已保存的完整提示词和明确依赖文件调用原生生图。保存首次图片和真实执行记录，运行 `result ... --project-root <story>` 后，通过本项目 `assets register --provenance imagegen --expected-sha256 ...` 登记，再读回状态。
+6. 默认 API 模式先收齐本次全部集/段的交接和导入，再集中执行 `images plan/run`；每个必要素材仅使用其已保存的完整提示词和明确依赖文件。CLI 自动登记后按下节 1.1.0 保存并校验实际 API 结果，不重复登记。仅在用户明确选择 built_in 时调用原生生图，保存首次图片和真实执行记录，运行 `result ... --project-root <story>` 后，通过本项目 `assets register --provenance imagegen --expected-sha256 ...` 登记，再读回状态。
 
 文件记录放在 `.metasocli/drafts/<本次UUID>/reference-image-{request,recipe,result}.json`；各次图片文件使用 `.metasocli/drafts/assets/<operationId>/`。上下游之间只有文件交接和本包 CLI，不调用旧程序、旧 Skill 或远端画布。
 
 已有图片由用户指定时，使用准确素材 ID，以 `--provenance user` 正式登记并验证后复用；不要为了套设计板模板重生成用户图片。若没有 Python 3.10+，可以按契约逐项核对并说明未运行校验器，CLI 的导入和媒体检查仍需执行。确定性检查不判断人物是否真的应该出镜，也不证明图中文字或外观正确。
+
+## API result 1.1.0（向后兼容扩展）
+
+request 和 recipe 继续使用 1.0.0，不改变旧配方哈希。旧 result 1.0.0 继续只接受 built_in/not_run；result 1.1.0 保留原全部字段，每项增加以下三个字段：
+
+- `requestedModel`：API generated 必须为真实请求中的 `gpt-image-2.5`；其他项 null。
+- `executionRelativePath`：API generated 为 `.metasocli/image-receipts/<operationId>/execution.json`；其他项 null。
+- `executionSha256`：上述实际执行记录文件的 SHA-256；其他项 null。
+
+API 成功项使用 generationMode=api，status=generated；operationId、完整 generationPrompt、recipeSha256、stagedRelativePath、contentSha256 取原任务和已保存文件，顺序保持逐集 request 的原顺序。reportedModel 只取实际 receipt 的字段，缺报为 null。CLI 的执行记录关联真实 Job、请求/输入哈希、原提示词文件、回执文件哈希及 requestedSize/width/height。校验器实际打开这些文件核对，不接受仅填写一个模型名作为证据。手动找回原结果时执行记录明确 recoveredManually，不能补造服务器模型回报。
+
+1.1.0 中复用、可选、未执行阻塞沿用 not_run，不冒充新生成。失败 API 项可用 generationMode=api/status=failed，artifact 和新增成功证据字段全为 null，reason 写明准确状态，原 operationId 在独立任务索引中保留；unknown 必须明确为待恢复，不能声称远端已失败或自动重试。requireExactModel=true 仍在调用前报 EXACT_MODEL_UNVERIFIABLE；锁定请求模型不证明供应商内部执行型号。
+
+API 计划、集中提交、自动条件登记与恢复参见 [实际用法](../../../docs/IMAGE_API_USAGE.md)。先收齐本次全部范围的逐集交接再提交，CLI 已登记的 API 结果不再次无条件登记。使用相同 result 校验命令，包含 --project-root。

@@ -8,12 +8,14 @@
   "engines": { "node": ">=24.0.0" },
   "bin": { "metasocli": "dist/cli/main.js" },
   "exports": { ".": "./dist/core/index.js" },
-  "files": ["dist/", "skills/", "README.md", "docs/", "examples/"],
+  "files": ["dist/", "skills/", "README.md", "docs/", "examples/", "scripts/connect-image-local.mjs"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --pool=threads",
     "test:process": "node scripts/process-smoke.mjs",
     "test:image-skill": "python -X utf8 -B tests/reference_image_skill_test.py",
+    "test:image-api": "vitest run tests/image-api.test.ts tests/image-api-http.test.ts tests/image-api-boundaries.test.ts --pool=threads",
+    "test:image-api:process": "node scripts/image-api-process-smoke.mjs",
     "check": "npm run build && npm test",
     "prepack": "npm run build"
   },

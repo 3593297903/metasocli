@@ -23,11 +23,26 @@ import { z } from 'zod';
 import { createBatchPlan, batchStatus, loadBatch, loadBatchRun } from '../jobs/batch-store.js';
 import { runBatch } from '../jobs/batch.js';
 import { reconcileRuntime, occupied } from '../jobs/coordinator.js';
+import { createImagePlan, loadImageProfile } from '../images/planning.js';
+import { runImages, imageStatus, recoverImage, attachImageResult, resolveImage, type ImageDependencies } from '../images/run.js';
+import { imageCredentialStatus, loadImageApiKey } from '../images/credentials.js';
+import { YicImageClient } from '../images/client.js';
+import { readImageJob } from '../images/store.js';
 
 export const HELP = `metasocli 0.1.0 — independent Metaso MiniMax-H3 CLI
 All story commands require --root <dedicated-story-directory>.
 
 auth status
+images auth-status                 Local image credential status only; no remote authentication probe.
+images plan --root <path> (--episodes <ordered,ids>|--selection <json>|--assets <ordered,ids>|--all-episodes)
+            [--profile <json>] --submission-mode all-ready
+images run --root <path> --plan <imagePlanId> --confirm
+images status --root <path> [--plan <imagePlanId>]
+images resume --root <path> --plan <imagePlanId>
+images recover --root <path> --operation <id>
+images attach-result --root <path> --operation <id> --file <image> --expected-sha256 <hash> --confirm-result-link
+images resolve --root <path> --operation <id> --outcome not-created|failed --evidence <json> --confirm-resolution
+images retry --root <path> --operation <id> --confirm
 init       --root <path> [--name <name>]
 import     --root <path> --draft <json> [--replace]
 import     --root <path> --file <utf8.txt> --kind script|video-prompts --episode <id> --duration <target-seconds: >0..15>
@@ -56,6 +71,9 @@ Legacy independent IR commands remain available for text tasks and recovery. IR 
 generate refuses false-IR plans: replan the original episode with h3-inline-ir. Use resume for existing tasks.
 resume/status/download never create a task or change its original parameters.
 batch resume may create the remaining items of its saved, authorized scope. Receipt of task_id does not free a slot.
+images resume may POST unstarted items ONLY within its saved image authorization. images recover never creates.
+Image all-ready starts every ready request independently (n=1); no generation-slot pool or automatic POST retries.
+Images use METASOCLI_IMAGE_API_KEY / independent encrypted credentials. Real provider capacity remains unverified.
 Video slots are shared (max 4); downloads run separately (max 2). Only one batch scheduler runs per installation.
 Use --runtime-dir <isolated-directory> or METASO_RUNTIME_DIR for development/tests; production defaults to ~/.metasocli-runtime.
 init/import/plan/status/doctor work without an API key. Remote operations use METASO_API_KEY or this installation's encrypted credential.
@@ -91,6 +109,13 @@ const flags: Record<string, { strings?: string[]; booleans?: string[] }> = {
   'batch run': { strings: ['batch', 'max-polls', 'poll-ms', 'scheduler-wait-ms'], booleans: ['confirm'] },
   'batch resume': { strings: ['batch', 'max-polls', 'poll-ms', 'scheduler-wait-ms'] },
   'batch status': { strings: ['batch'] }, 'batch register': {},
+  'images auth-status': {},
+  'images plan': { strings:['episodes','selection','assets','profile','submission-mode'],booleans:['all-episodes'] },
+  'images run': { strings:['plan'],booleans:['confirm'] }, 'images resume': { strings:['plan'] },
+  'images status': { strings:['plan'] }, 'images recover': { strings:['operation'] },
+  'images attach-result': { strings:['operation','file','expected-sha256'],booleans:['confirm-result-link'] },
+  'images resolve': { strings:['operation','outcome','evidence'],booleans:['confirm-resolution'] },
+  'images retry': { strings:['operation'],booleans:['confirm'] },
 };
 function pollOptions(v: Record<string, Value>) {
   const maxPolls = number(v, 'max-polls'), pollIntervalMs = number(v, 'poll-ms');
@@ -100,11 +125,11 @@ function pollOptions(v: Record<string, Value>) {
 }
 function jobExit(job: { status: string; lastError?: unknown }) { return ['failed', 'cancelled', 'submit_unknown', 'query_unknown'].includes(job.status) || job.lastError ? 2 : 0; }
 export interface CliResult { exitCode: number; data: unknown }
-export async function runCli(args: string[], injected?: JobDependencies & { irClient?: ContextIrClient; irPersistence?: IrPersistence }): Promise<CliResult> {
+export async function runCli(args: string[], injected?: JobDependencies & { irClient?: ContextIrClient; irPersistence?: IrPersistence }, imageInjected?: ImageDependencies): Promise<CliResult> {
   try {
     if (!args.length || args.includes('--help') || args[0] === 'help') return { exitCode: 0, data: HELP };
     if (args[0] === '--version') return { exitCode: 0, data: '0.1.0' };
-    const count = ['assets', 'auth', 'batch'].includes(args[0] ?? '') ? 2 : 1, command = args.slice(0, count).join(' '), spec = flags[command];
+    const count = ['assets', 'auth', 'batch', 'images'].includes(args[0] ?? '') ? 2 : 1, command = args.slice(0, count).join(' '), spec = flags[command];
     if (!spec) fail('CLI_ARGUMENT', 'Unknown command. Run --help.');
     const options: Record<string, { type: 'string' | 'boolean' }> = { root: { type: 'string' }, json: { type: 'boolean' }, 'runtime-dir': { type: 'string' } };
     for (const name of spec.strings ?? []) options[name] = { type: 'string' };
@@ -113,7 +138,29 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
     try { v = parseArgs({ args: args.slice(count), options, strict: true, allowPositionals: false }).values as Record<string, Value>; }
     catch { return fail('CLI_ARGUMENT', 'Invalid command options. Run --help; values and secrets are not echoed.'); }
     if (command === 'auth status') return { exitCode: 0, data: { ...(await credentialStatus()), provider: 'Metaso', model: 'MiniMax-H3', liveCheckPerformed: false } };
+    if (command === 'images auth-status') return {exitCode:0,data:{...await imageCredentialStatus(),provider:'yiciyuang',requestedModel:'gpt-image-2.5',liveCheckPerformed:false}};
     const root = resolve(required(v, 'root'));
+    if (command.startsWith('images ')) {
+      const secrets=[process.env.METASOCLI_IMAGE_API_KEY??''];
+      let imageClient:Promise<YicImageClient>|undefined;
+      const readyImageClient=()=>imageClient??=(async()=>{const key=await loadImageApiKey();secrets.push(key);return new YicImageClient(key);})();
+      const imageDeps:ImageDependencies={...imageInjected,...(v['runtime-dir']?{runtimeRoot:resolve(required(v,'runtime-dir'))}:{}),
+        client:imageInjected?.client??{async prepare(){await readyImageClient();},async create(root,input,profile){return (await readyImageClient()).create(root,input,profile);}}};
+      let data:unknown,exitCode=0;
+      if(command==='images plan')data=await createImagePlan(root,{...(v.episodes?{episodes:required(v,'episodes').split(',').map(s=>s.trim())}:{}),
+        ...(v.assets?{assets:required(v,'assets').split(',').map(s=>s.trim())}:{}),...(v.selection?{selection:await readJson(resolve(required(v,'selection')))}:{}),
+        allEpisodes:v['all-episodes']===true,profile:await loadImageProfile(v.profile as string|undefined),submissionMode:required(v,'submission-mode')});
+      else if(command==='images status')data=await imageStatus(root,v.plan as string|undefined);
+      else if(command==='images run'||command==='images resume'||command==='images retry') {
+        if(command!=='images resume'&&v.confirm!==true)fail('IMAGE_NOT_AUTHORIZED','Authorize this image provider and frozen scope/new attempt before --confirm.');
+        const retryOf=command==='images retry'?required(v,'operation'):undefined;
+        const id=retryOf?(await readImageJob(root,retryOf)).planId:required(v,'plan');
+        const result=await runImages(root,id,command!=='images resume',imageDeps,retryOf);data=result;exitCode=result.run?.status==='complete'?0:2;
+      }else if(command==='images recover'){const job=await recoverImage(root,required(v,'operation'),imageDeps);data=job;exitCode=job.status==='registered'?0:2;}
+      else if(command==='images attach-result')data=await attachImageResult(root,required(v,'operation'),resolve(required(v,'file')),required(v,'expected-sha256'),v['confirm-result-link']===true,imageDeps);
+      else if(command==='images resolve')data=await resolveImage(root,required(v,'operation'),required(v,'outcome'),await readJson(resolve(required(v,'evidence'))),v['confirm-resolution']===true,imageDeps);
+      return {exitCode,data:redact(data,secrets)};
+    }
     const deps = async () => ({ ...(injected ?? { client: new MetasoClient(await loadApiKey()) }), ...(v['runtime-dir'] ? { runtimeRoot: resolve(required(v, 'runtime-dir')) } : {}) });
     const irDeps = async (): Promise<IrDependencies> => {
       if (!injected) return { client: new MetasoClient(await loadApiKey()) };
@@ -228,7 +275,7 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const result = await runCli(process.argv.slice(2));
-  const data = redact(result.data, [process.env.METASO_API_KEY ?? '']);
+  const data = redact(result.data, [process.env.METASO_API_KEY ?? '', process.env.METASOCLI_IMAGE_API_KEY ?? '']);
   process.stdout.write(typeof data === 'string' ? `${data}\n` : `${JSON.stringify(data, null, 2)}\n`);
   process.exitCode = result.exitCode;
 }
