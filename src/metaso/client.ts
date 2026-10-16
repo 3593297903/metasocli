@@ -22,15 +22,19 @@ export function redact(value: unknown, secrets: readonly string[] = []): unknown
   return value;
 }
 export interface Evidence { sha256: string; response: unknown; httpStatus?: number }
+export const CreateDiagnostics = z.object({ stage: z.enum(['response-headers','response-body','response-contract','transport']),
+  durationMs: z.number().nonnegative(), receivedHeaders: z.boolean(), httpStatus: z.number().optional(),
+  errorName: z.string().max(128).optional(), errorCode: z.string().max(128).optional(), requestId: z.string().max(256).optional() }).strict();
+export type CreationDiagnostics = z.infer<typeof CreateDiagnostics>;
 export class ProviderError extends MetasoError {
-  constructor(code: string, message: string, readonly options: { rejected?: boolean; retryable?: boolean; retryAfterMs?: number; evidence?: Evidence; httpStatus?: number; safeToRetry?: boolean } = {}) { super(code, message); }
+  constructor(code: string, message: string, readonly options: { rejected?: boolean; retryable?: boolean; retryAfterMs?: number; evidence?: Evidence; httpStatus?: number; safeToRetry?: boolean; diagnostics?: CreationDiagnostics } = {}) { super(code, message); }
 }
 export interface Submission { taskId: string; evidence: Evidence }
 export interface Observation {
   taskId: string; status: 'queued' | 'running' | 'generated' | 'failed' | 'cancelled' | 'unknown';
   rawStatus: string; url?: string; duration?: number; resolution?: string; ratio?: string; evidence: Evidence;
 }
-export interface VideoClient { create(request: H3Request): Promise<Submission>; query(taskId: string): Promise<Observation> }
+export interface VideoClient { prepare?(): Promise<void>; create(request: H3Request): Promise<Submission>; query(taskId: string): Promise<Observation> }
 export interface IrObservation {
   taskId: string; model: 'MiniMax-H3'; taskType: 'h3_context_ir';
   status: 'queued' | 'running' | 'enhanced' | 'failed' | 'cancelled' | 'unknown';
@@ -49,17 +53,31 @@ export class MetasoClient implements VideoClient, ContextIrClient {
     this.#key = key;
   }
   private async request(method: 'POST' | 'GET', suffix: string, body?: H3Request | IrRequest, absoluteUrl?: string) {
-    let response: Response, bytes: Buffer;
+    let response: Response | undefined, bytes: Buffer;
+    let bodyRequestId: string | undefined;
+    const started = performance.now();
+    const safeToken = (value: unknown, limit: number) => {
+      const text = typeof value === 'number' && Number.isFinite(value) ? String(value) : value;
+      return typeof text === 'string' && /^[a-z0-9_.:-]+$/iu.test(text) ? String(redact(text, [this.#key])).slice(0, limit) : undefined;
+    };
+    const diagnostics = (stage: CreationDiagnostics['stage'], error?: unknown): CreationDiagnostics => {
+      const e = error && typeof error === 'object' ? error as { name?: unknown; code?: unknown; cause?: { code?: unknown } } : undefined;
+      const requestId = safeToken(response?.headers.get('x-request-id') ?? response?.headers.get('request-id') ?? bodyRequestId, 256);
+      return { stage, durationMs: Math.round(performance.now() - started), receivedHeaders: !!response,
+        ...(response ? { httpStatus: response.status } : {}), ...(requestId ? { requestId } : {}),
+        ...(e ? { errorName: safeToken(e.name, 128), errorCode: safeToken(e.code ?? e.cause?.code, 128) } : {}) };
+    };
     try {
       response = await this.fetcher(absoluteUrl ?? `${API_BASE}/${suffix}`, { method, redirect: 'error', signal: AbortSignal.timeout(method === 'POST' ? this.createTimeoutMs : this.timeoutMs),
         headers: { Authorization: `Bearer ${this.#key}`, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
         ...(body ? { body: JSON.stringify(body) } : {}) });
       bytes = await boundedBody(response, 1024 * 1024);
-    } catch {
-      throw new ProviderError('PROVIDER_UNREACHABLE', 'Provider response was not received completely.', { retryable: method === 'GET' });
+    } catch (error) {
+      throw new ProviderError('PROVIDER_UNREACHABLE', 'Provider response was not received completely.', { retryable: method === 'GET', diagnostics: diagnostics(response ? 'response-body' : 'response-headers', error) });
     }
     let raw: unknown;
     try { raw = JSON.parse(bytes.toString('utf8')); } catch { raw = { malformedJson: true }; }
+    if (raw && typeof raw === 'object' && 'request_id' in raw) bodyRequestId = safeToken(raw.request_id, 256);
     const evidence: Evidence = { sha256: sha256Hex(bytes), response: redact(raw, [this.#key]), httpStatus: response.status };
     const hasIdentity = (value: unknown): boolean => !!value && typeof value === 'object' && Object.entries(value).some(([key, child]) => /^(?:task_?id|id)$/iu.test(key) || hasIdentity(child));
     const meaningfulError = (value: unknown): boolean => typeof value === 'string' ? !!value.trim()
@@ -73,15 +91,16 @@ export class MetasoClient implements VideoClient, ContextIrClient {
       httpStatus: response.status, safeToRetry: method === 'POST' && safeRateLimit,
       retryable: method === 'GET' && (response.status === 429 || response.status >= 500),
       retryAfterMs: retryAfter(response.headers.get('retry-after')), evidence,
+      diagnostics: diagnostics('response-contract'),
     });
-    return { raw, evidence };
+    return { raw, evidence, diagnostics: diagnostics('response-contract') };
   }
   async create(request: H3Request): Promise<Submission> {
-    const { raw, evidence } = await this.request('POST', 'video_generation', validateRequest(request));
+    const { raw, evidence, diagnostics } = await this.request('POST', 'video_generation', validateRequest(request));
     const schema = z.object({ task_id: TaskId.optional(), task: z.object({ id: TaskId.optional(), task_id: TaskId.optional() }).optional() });
     const parsed = schema.safeParse(raw);
     const ids = parsed.success ? [parsed.data.task_id, parsed.data.task?.id, parsed.data.task?.task_id].filter((v): v is string => v !== undefined) : [];
-    if (!ids.length || new Set(ids).size !== 1) throw new ProviderError('CREATE_CONTRACT', 'Create response lacks one unambiguous task ID; do not resubmit.', { evidence });
+    if (!ids.length || new Set(ids).size !== 1) throw new ProviderError('CREATE_CONTRACT', 'Create response lacks one unambiguous task ID; do not resubmit.', { evidence, diagnostics });
     return { taskId: ids[0]!, evidence };
   }
   async query(taskId: string): Promise<Observation> {

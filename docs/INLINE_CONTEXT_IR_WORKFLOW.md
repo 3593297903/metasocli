@@ -22,13 +22,13 @@ node E:\metasocli\dist\cli\main.js batch run --root <story> --batch <batchId> --
 
 部分段用 `batch plan --selection <selection.json>`，完整格式见 [README](../README.md#四并发持续补位)。单段兼容命令仍为 `generate --plan <id> --segment <id> --confirm`。提交时重新构造同一请求并核对计划哈希，HTTP 客户端将该请求完整 JSON 序列化发送，不能只在提示词或日志里写 true。CLI 会在读取凭据、创建任何任务前拒绝所选范围内含 false 的计划，返回 `INLINE_IR_REQUIRED`；批次只接受冻结的 inline 计划。新计划不能直接覆盖旧计划中的开关或哈希。
 
-默认4个生成占位持续补位，收到 task_id 不释放；终态验证落盘后释放。下载独立最多2个并行。`batch status` 只读本地，`batch resume` 可接回任务并继续原授权内待提交段；旧 `resume --operation` 始终不新建。未知创建保留占位、停止新增，下载失败仅恢复下载。所有新版 CLI 视频创建入口共用安装名额；真实账户并发与限流尚未付费验收。
+默认4个生成占位持续补位，收到 task_id 不释放；终态验证落盘后释放。下载独立最多2个并行。`batch status` 只读本地，`batch resume` 可接回任务并继续原授权内待提交段；旧 `resume --operation` 始终不新建。未显式确认的未知创建保留占位、停止新增，下载失败仅恢复下载。所有新版 CLI 视频创建入口共用安装名额；真实账户并发与限流尚未付费验收。
 
 ## 历史项目与恢复
 
 - 已有项目要进行新的生成，对原始集执行上述新 plan 命令即可；素材无需重新生成，原文和旁白绑定无需重导入。
 - 旧 false 计划（包括独立 IR 派生计划）不能直接交给当前 CLI 新建视频。不得把已增强文本又当作原文自动叠加一遍 IR；重新计划应选择原始集。若历史任务曾手工增加 `*-ir` 副本集，应选择其对应的原始集。
-- 已经提交、成功或结果未知的任务仍用 `status`、`resume`、`download`、`attach-task` 按原 ID 恢复。升级不会重生成它们，也不会把历史请求改为 true；未知或活动任务依旧阻止冲突的新提交。
+- 已经提交、成功或结果未知的任务仍用 `status`、`resume`、`download`、`attach-task` 按原 ID 恢复。升级不会重生成它们，也不会把历史请求改为 true；未显式确认的未知或活动任务依旧阻止冲突的新提交。
 - 旧独立 IR 文本命令、派生计划契约与底层兼容模块保留，供历史数据核对和明确要求的独立文本任务使用。它们不是当前 Skill 默认生成流程。不要直接调用底层 `submit` 绕过 CLI 的 true 检查。
 
 ## 请求参数与响应证据
@@ -38,3 +38,7 @@ node E:\metasocli\dist\cli\main.js batch run --root <story> --batch <batchId> --
 内联模式没有独立的本地 IR 文本审阅停顿，不能声称在生成前已人工核对服务端内部增强文本。原始提示词与完整素材仍原样送入该请求，模型对台词、镜头及声线的实际遵从程度需查看真实成片。
 
 此次改动只做离线 HTTP 序列化、任务恢复及旧计划兼容测试，不发起付费调用；不能把离线验证写成 Metaso 已实际接收本次 true 请求。
+
+## 未知视频的显式新尝试
+
+默认未知不自动重发。当前用户明确授权无 taskId 的某段一次新生成时，用本地 operationId 执行 `generate --retry-of <id> --segment <id> --confirm --accept-unknown-result` 或 `batch retry --operation <id> --confirm --accept-unknown-result`（同时传 --root 与 --plan/--batch）。同一授权只产生一个稳定新尝试；旧未知保留历史与名额，满四个可能名额时等待已知任务终态。其他未确认未知仍阻断；批次其他段仅沿用原保存授权。具体命令与恢复见 [一次性显式重试](VIDEO_UNKNOWN_RETRY.md)。这不改变旧 false 请求、独立 IR 或图片恢复规则，不代表真实接口已验收。

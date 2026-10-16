@@ -12,6 +12,7 @@ import { withProjectWrite } from '../storage/locking.js';
 import { listJobs } from './store.js';
 import { listIrOperations } from './context-ir-store.js';
 import { reconcileOutput } from './video.js';
+import { effectiveJobs, listVideoRetries, retryProgress } from './video-retry.js';
 export const batchPath = (root: string, id: string, name: 'plan'|'run') => projectPath(root, '.metasocli/batches/' + parse(z.uuid(), id) + '/' + name + '.json');
 export async function loadBatch(root: string, id: string) {
   const plan = parse(BatchPlan, await readJson(await batchPath(root, id, 'plan'))), { batchHash, ...base } = plan;
@@ -36,6 +37,13 @@ export async function loadBatchRun(root: string, plan: VideoBatchPlan): Promise<
   const run = parse(BatchRun, await readJson(file)), { hash, ...base } = run;
   if (canonicalSha256(base) !== hash || run.batchId !== plan.batchId || run.batchHash !== plan.batchHash || run.authorization.batchHash !== plan.batchHash
     || run.items.length !== plan.items.length || run.items.some((i, index) => i.order !== index)) fail('BATCH_RUN_TAMPERED', 'Run authorization or index does not match this batch.');
+  if (run.authorization.retryOnly) {
+    const retries = await listVideoRetries(root), ids = run.authorization.retryOnly;
+    if (new Set(ids).size !== ids.length || ids.some(id => !retries.some(a => a.newOperationId === id
+      && plan.items.some(i => i.planId === a.planId && i.segmentId === a.segmentId && i.inputHash === a.inputHash && i.requestHash === a.requestHash)))) {
+      fail('BATCH_RUN_TAMPERED', 'Restricted batch scope lacks its exact one-attempt authorization.');
+    }
+  }
   return run;
 }
 export async function saveBatchRun(root: string, run: VideoBatchRun) {
@@ -45,13 +53,13 @@ export async function saveBatchRun(root: string, run: VideoBatchRun) {
   await withProjectWrite(root, async () => writeJson(await batchPath(root, snapshot.batchId, 'run'), snapshot));
 }
 export async function batchStatus(root: string, id: string) {
-  const plan = await loadBatch(root, id), run = await loadBatchRun(root, plan), jobs = await listJobs(root);
+  const plan = await loadBatch(root, id), run = await loadBatchRun(root, plan), allJobs = await listJobs(root), jobs = effectiveJobs(allJobs);
   let reusable = 0, active = 0, pending = 0, failed = 0, downloads = 0;
   const items = [];
   for (const item of plan.items) {
     const job = jobs.filter(j => j.episodeId === item.episodeId && j.segmentId === item.segmentId && j.inputHash === item.inputHash).at(-1);
     const saved = run?.items[item.order];
-    if (saved?.operationId && !jobs.some(j => j.operationId === saved.operationId && j.inputHash === item.inputHash && j.episodeId === item.episodeId && j.segmentId === item.segmentId)) fail('BATCH_RUN_TAMPERED', 'Batch index is linked to a different task.');
+    if (saved?.operationId && !allJobs.some(j => j.operationId === saved.operationId && j.inputHash === item.inputHash && j.episodeId === item.episodeId && j.segmentId === item.segmentId)) fail('BATCH_RUN_TAMPERED', 'Batch index is linked to a different task.');
     let outputError: string | undefined;
     if (!job || job.status === 'prepared') pending++;
     else if (job.status === 'downloaded') {
@@ -61,7 +69,8 @@ export async function batchStatus(root: string, id: string) {
     else active++;
     items.push({ ...item, ...(job ? { job } : {}), ...(outputError ? { outputError } : {}) });
   }
-  return { plan, run, summary: { total: items.length, reusable, active, pending, failed, downloads, concurrency: plan.concurrency, downloadConcurrency: plan.downloadConcurrency }, items };
+  const retries = await Promise.all((await listVideoRetries(root)).filter(a => plan.items.some(i => i.planId === a.planId && i.segmentId === a.segmentId)).map(a => retryProgress(root, a)));
+  return { plan, run, summary: { total: items.length, reusable, active, pending, failed, downloads, concurrency: plan.concurrency, downloadConcurrency: plan.downloadConcurrency }, items, retries };
 }
 export async function createBatchPlan(root: string, input: { episodes?: string[]; selection?: unknown; allEpisodes?: boolean; concurrency?: number }) {
   if ([input.episodes !== undefined, input.selection !== undefined, input.allEpisodes === true].filter(Boolean).length !== 1) fail('BATCH_SCOPE', 'Use exactly one of --episodes, --selection or --all-episodes.');

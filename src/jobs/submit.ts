@@ -8,7 +8,8 @@ import { ProviderError, type VideoClient, type Submission } from '../metaso/clie
 import type { Fetch } from '../metaso/transport.js';
 import { listJobs, readJob, persistence, saveEvidence, type Persistence } from './store.js';
 import { assertTaskIdAvailable, checkSubmissionConflicts, operationKind, verifyRemoteAssets } from './submission-guard.js';
-import { occupied, unsafeSlots, runtimeDirectory, withCoordinator, reconcileRuntime, requireScheduler, slotFor } from './coordinator.js';
+import { occupied, blockingSlots, runtimeDirectory, withCoordinator, reconcileRuntime, requireScheduler, slotFor } from './coordinator.js';
+import { authorizeVideoRetry, effectiveJobs, listVideoRetries, materializeRetry, readVideoRetry, supersededRetry } from './video-retry.js';
 import { saveSubmissionOwner, submissionLeasePath } from './submission-owner.js';
 import { projectPath } from '../storage/paths.js';
 import { writeJson } from '../storage/io.js';
@@ -19,27 +20,59 @@ export interface JobDependencies {
   checkpoint?: (event: string, job: Job) => Promise<void>;
 }
 function choose(jobs: Job[], episodeId: string, segmentId: string, inputHash: string, retryOf?: string) {
+  jobs = effectiveJobs(jobs);
   const related = jobs.filter(j => j.episodeId === episodeId && j.segmentId === segmentId);
   const previous = related.filter(j => j.inputHash === inputHash).at(-1);
   if (retryOf) {
     const repeated = jobs.find(j => j.retryOf === retryOf);
     if (repeated) {
       if (repeated.inputHash !== inputHash || !related.includes(repeated)) fail('RETRY_CONFLICT', 'Retry belongs to a different request.');
-      return { previous: repeated, reuse: true };
+      return { previous: repeated, reuse: repeated.status !== 'prepared' };
     }
     if (!previous || previous.operationId !== retryOf || !['failed', 'cancelled'].includes(previous.status)) fail('RETRY_FORBIDDEN', 'Only the latest definitively failed or cancelled attempt can be explicitly regenerated.');
   }
   return { previous, reuse: !retryOf && !!previous && previous.status !== 'prepared' };
 }
+async function validatePreparedRetry(root: string, planId: string, job: Job | undefined, runtime: string) {
+  if (job?.status !== 'prepared' || !job.retryOf) return undefined;
+  const a = await readVideoRetry(root, job.retryOf, runtime);
+  if (a?.newOperationId === job.operationId && a.planId === planId) return a;
+  // C is an ordinary failed-task retry, independent of the retained A -> B grant.
+  // Its prepared job is the durable intent, reused by CLI repetition and batch resume.
+  if (!['failed', 'cancelled'].includes((await readJob(root, job.retryOf)).status)
+    || (a && (job.planId !== planId || job.attempt <= a.attempt || !await supersededRetry(root, a)))) {
+    fail('RETRY_CONFLICT', 'Prepared retry must use its original authorization and plan.');
+  }
+  return undefined;
+}
 /** Persist/reserve under short locks, POST exactly once outside locks, persist receipt before indexing. */
-export async function submit(root: string, planId: string, segmentId: string, authorized: boolean, deps: JobDependencies, retryOf?: string): Promise<Job> {
+export async function submit(root: string, planId: string, segmentId: string, authorized: boolean, deps: JobDependencies, retryOf?: string, acceptUnknownResult = false): Promise<Job> {
   if (authorized !== true) fail('GENERATION_NOT_AUTHORIZED', 'Generation requires explicit authorization for this plan.');
   parse(Id, segmentId);
   const disk = deps.persistence ?? persistence, runtime = runtimeDirectory(deps.runtimeRoot);
   const plan = await loadPlan(root, planId), segment = plan.segments.find(s => s.segmentId === segmentId);
   if (plan.workflow?.stage === 'prepare') fail('IR_PREPARE_NOT_VIDEO', 'This is an IR preparation plan; derive a video plan before video submission.');
   if (!segment) fail('SEGMENT_MISSING', 'Segment is absent from the chosen plan.');
+  if (acceptUnknownResult) {
+    if (!retryOf) fail('CLI_ARGUMENT', '--accept-unknown-result requires one local --retry-of operation.');
+    const result = await authorizeVideoRetry(root, planId, segmentId, retryOf, authorized, true, runtime, deps.checkpoint);
+    if (result.job.operationId === retryOf || result.job.status !== 'prepared') return result.job;
+  }
+  // Repair only the pre-intent authorization checkpoint, including batch resume after a crash.
+  const savedRetries = await listVideoRetries(root, runtime);
+  const applicable = savedRetries.filter(a => a.planId === planId && a.segmentId === segmentId);
+  for (const a of applicable) await withProjectWrite(root, () => materializeRetry(root, a, deps.checkpoint));
+  if (retryOf) {
+    const a = await readVideoRetry(root, retryOf, runtime);
+    if (a) {
+      if (a.planId !== planId || a.segmentId !== segmentId) fail('RETRY_CONFLICT', 'Saved retry belongs to another plan or segment.');
+      const job = await withProjectWrite(root, () => materializeRetry(root, a));
+      const ordinaryFailure = !acceptUnknownResult && job.operationId === retryOf && ['failed', 'cancelled'].includes(job.status) && await supersededRetry(root, a);
+      if (!ordinaryFailure && (job.operationId === retryOf || job.status !== 'prepared')) return job;
+    }
+  }
   const initial = choose(await listJobs(root), plan.episodeId, segmentId, segment.inputHash, retryOf);
+  await validatePreparedRetry(root, planId, initial.previous, runtime);
   if (initial.reuse) {
     await operationKind(root, initial.previous!.operationId);
     if (initial.previous!.status === 'submitting') fail('LOCK_BUSY', 'This request is still owned by its submitting process.');
@@ -48,28 +81,47 @@ export async function submit(root: string, planId: string, segmentId: string, au
   // Network reference validation is outside project/shared locks. Rebuild locally again when reserving.
   const preflight = await validatePlan(root, plan);
   await verifyRemoteAssets(preflight.story, preflight.built.find(b => b.summary.segmentId === segmentId)!.summary.assets, deps.fetcher);
+  await deps.client.prepare?.();
   let owner: Lease | undefined;
   try {
     const prepared = await withCoordinator(root, runtime, async (ledger, save) => withProjectWrite(root, async () => {
       await requireScheduler(runtime, deps.schedulerToken);
+      for (const a of applicable) {
+        const target = await materializeRetry(root, a);
+        // Recovered active A still supersedes an unstarted B. A terminal A can
+        // instead be the parent of an explicitly requested ordinary retry C.
+        if (target.operationId === a.oldOperationId && retryOf === a.oldOperationId
+          && (acceptUnknownResult || !['failed', 'cancelled'].includes(target.status) || !await supersededRetry(root, a))) return { job: target };
+      }
       const jobs = await listJobs(root), selected = choose(jobs, plan.episodeId, segmentId, segment.inputHash, retryOf);
       if (selected.reuse) {
         if (selected.previous!.status === 'submitting') fail('LOCK_BUSY', 'This request is still submitting.');
         return { job: selected.previous! };
       }
-      await checkSubmissionConflicts(root, plan.episodeId, segmentId);
-      if (unsafeSlots(ledger).length) fail('SUBMIT_UNKNOWN', 'Shared capacity contains an unknown task; recover it before creating.');
+      const pendingAuthorization = await validatePreparedRetry(root, planId, selected.previous, runtime);
+      if (pendingAuthorization) {
+        const target = await materializeRetry(root, pendingAuthorization);
+        if (target.operationId === pendingAuthorization.oldOperationId) return { job: target };
+      }
+      const acknowledgements = await listVideoRetries(root, runtime);
+      await checkSubmissionConflicts(root, plan.episodeId, segmentId, undefined, new Set(acknowledgements.map(a => a.oldOperationId)));
+      if ((await blockingSlots(root, ledger, runtime)).length) fail('SUBMIT_UNKNOWN', 'Shared capacity contains an unacknowledged unknown task; recover it before creating.');
       const previous = selected.previous;
-      const held = !retryOf && previous?.status === 'prepared' ? ledger.slots.find(s => s.operationId === previous.operationId) : undefined;
+      const held = previous?.status === 'prepared' ? ledger.slots.find(s => s.operationId === previous.operationId) : undefined;
       const capacity = deps.capacity ?? 4;
       if (!Number.isInteger(capacity) || capacity < 1 || capacity > 4) fail('CAPACITY_INVALID', 'Video capacity must be 1–4.');
-      if (occupied(ledger).length - (held ? 1 : 0) >= capacity) fail('CAPACITY_FULL', 'Remote video slots are occupied; query existing tasks first.');
+      if (occupied(ledger).length - (held ? 1 : 0) >= capacity) {
+        if (previous?.status === 'prepared' && acknowledgements.some(a => a.newOperationId === previous.operationId)) return { job: previous };
+        fail('CAPACITY_FULL', 'Remote video slots are occupied; query existing tasks first.');
+      }
       const { built } = await validatePlan(root, plan), request = built.find(b => b.summary.segmentId === segmentId)!.request;
       const now = new Date().toISOString();
-      const job: Job = !retryOf && previous?.status === 'prepared' ? previous : {
+      const job: Job = previous?.status === 'prepared' ? previous : {
         schemaVersion: 1, operationId: randomUUID(), projectId: plan.projectId, planId: plan.planId, planHash: plan.planHash,
         episodeId: plan.episodeId, segmentId, revision: plan.revision, requestHash: segment.requestHash, inputHash: segment.inputHash,
-        attempt: (previous?.attempt ?? 0) + 1, ...(retryOf ? { retryOf } : {}), status: 'prepared', createdAt: now, updatedAt: now,
+        attempt: Math.max(previous?.attempt ?? 0, ...jobs.filter(j => j.episodeId === plan.episodeId && j.segmentId === segmentId && j.inputHash === segment.inputHash).map(j => j.attempt),
+          ...applicable.map(a => a.attempt)) + 1,
+        ...(retryOf ? { retryOf } : {}), status: 'prepared', createdAt: now, updatedAt: now,
       };
       await disk.job(root, job); await operationKind(root, job.operationId);
       owner = await acquireLease(await submissionLeasePath(root, job.operationId));
@@ -86,6 +138,7 @@ export async function submit(root: string, planId: string, segmentId: string, au
     const job = prepared.job;
     await owner!.assertOwned();
     let receipt: Submission;
+    const started = performance.now();
     try {
       receipt = await deps.client.create(prepared.request);
       parse(Receipt, { operationId: job.operationId, requestHash: job.requestHash, taskId: receipt.taskId, receivedAt: new Date().toISOString() });
@@ -94,12 +147,14 @@ export async function submit(root: string, planId: string, segmentId: string, au
         await owner!.assertOwned();
         const current = await readJob(root, job.operationId);
         current.status = error instanceof ProviderError && error.options.rejected ? 'failed' : 'submit_unknown';
-        current.lastError = { code: current.status === 'failed' ? 'CREATE_REJECTED' : 'SUBMIT_UNKNOWN', message: current.status === 'failed' ? 'Provider explicitly rejected creation.' : 'Creation result is unknown. Recover the original task ID; do not resubmit.' };
-        if (error instanceof ProviderError) {
-          await writeJson(await projectPath(root, '.metasocli/receipts/' + job.operationId + '-create-error.json'), {
-            operationId: job.operationId, requestHash: job.requestHash, httpStatus: error.options.httpStatus ?? null,
-            safeToRetry: error.options.safeToRetry === true, retryAfterMs: error.options.retryAfterMs ?? 0,
+        current.lastError = { code: current.status === 'failed' ? 'CREATE_REJECTED' : 'SUBMIT_UNKNOWN', message: current.status === 'failed' ? 'Provider explicitly rejected creation.' : 'Creation result is unknown. Preserve this operation; recovery never automatically resubmits. A separate one-attempt authorization is required to generate again.' };
+        const options = error instanceof ProviderError ? error.options : {};
+        await writeJson(await projectPath(root, '.metasocli/receipts/' + job.operationId + '-create-error.json'), {
+            operationId: job.operationId, requestHash: job.requestHash, httpStatus: options.httpStatus ?? options.diagnostics?.httpStatus ?? null,
+            safeToRetry: options.safeToRetry === true, retryAfterMs: options.retryAfterMs ?? 0,
+            diagnostics: options.diagnostics ?? { stage: 'transport', durationMs: Math.round(performance.now() - started), receivedHeaders: false },
           });
+        if (error instanceof ProviderError) {
           if (error.options.evidence) await saveEvidence(root, current, error.options.evidence);
         }
         current.updatedAt = new Date().toISOString(); await disk.job(root, current); return current;

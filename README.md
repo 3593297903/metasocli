@@ -147,7 +147,7 @@ node $cli batch resume --root $story --batch $batchId
 
 每个批次保存不可变计划哈希、请求及素材指纹、范围和运行授权。默认最多4个生成名额，可设置1—4。4个创建请求可同时在途；task_id 仅代表已受理，queued/running/受控 submitting/未知都继续占位。服务端终态验证并持久化后补下一个待提交段。下载另有最多2个并发，慢下载和下载失败不堵塞生成补位；输出仍为 `outputs/<episodeId>/<segmentId>-<operationId>.mp4`。
 
-`batch run --confirm` 将授权绑定该批次哈希；`batch resume` 只能使用已保存授权，**允许继续范围内尚未提交的段**。旧 `resume --operation`、status、download 始终不创建任务。批次会接回已有 task_id，重建缺失的批次任务链接，复用通过文件/回执检查的成片。创建未知停止新增并保留占位，已知任务继续查询和下载；失败段不自动重做。只有明确未受理且无任何任务 ID 的429可自动重试，每段最多2次、批次累计等待最多60000ms，预算/每次尝试在新 POST 前保存；遵守更长 Retry-After 时超出预算则暂停。超时、5xx、矛盾回包绝不自动重发，401/402/403停止新增。POST 响应上限120秒、GET30秒，延长超时不代表幂等保证。
+`batch run --confirm` 将授权绑定该批次哈希；`batch resume` 只能使用已保存授权，**允许继续范围内尚未提交的段**。旧 `resume --operation`、status、download 始终不创建任务。批次会接回已有 task_id，重建缺失的批次任务链接，复用通过文件/回执检查的成片。未显式确认的创建未知停止新增并保留占位，已知任务继续查询和下载；失败段不自动重做。只有明确未受理且无任何任务 ID 的429可自动重试，每段最多2次、批次累计等待最多60000ms，预算/每次尝试在新 POST 前保存；遵守更长 Retry-After 时超出预算则暂停。超时、5xx、矛盾回包绝不自动重发，401/402/403停止新增。POST 响应上限120秒、GET30秒，延长超时不代表幂等保证。
 
 `batch run/resume` 支持 `--max-polls 60 --poll-ms 5000`（每个任务、本次运行的轮询预算）及 `--scheduler-wait-ms 30000`（0—300000）。同一运行目录只有一个活跃批次调度器，竞争批次等待，超时返回 `LOCK_BUSY`；普通新建入口在活跃批次期间返回 `SCHEDULER_BUSY`。占满时单段提交返回 `CAPACITY_FULL`，先查询/恢复既有任务；不能换目录绕开名额。
 
@@ -167,14 +167,14 @@ download    --root <story> --operation <id> --redownload-missing
 
 提交前先落盘 prepared/submitting 请求记录及共享预留，取得 taskId 后先保存独立回执。同一请求重复执行复用已有操作；单段命令不自动重试创建，批次只有上述明确拒绝的429例外。本地哈希不代表服务端幂等。
 
-新流程的任务与回执继续位于 `.metasocli/jobs/` 和 `.metasocli/receipts/`。历史独立 IR 数据位于 `.metasocli/context-ir/`，本地 status 仍列 `contextIrOperations`，可以按原 ID 恢复。任一阶段未知提交会在项目锁内阻止新的收费创建。
+新流程的任务与回执继续位于 `.metasocli/jobs/` 和 `.metasocli/receipts/`。历史独立 IR 数据位于 `.metasocli/context-ir/`，本地 status 仍列 `contextIrOperations`，可以按原 ID 恢复。未显式确认的未知提交会在项目锁内阻止新的收费创建；视频的一次性显式授权只局部解除该条未知的派发阻断，仍保留占位。
 
 旧独立 IR 文本命令和底层兼容模块仍保留，历史结构见 [原独立流程记录](docs/CONTEXT_IR_WORKFLOW.md)。当前 Skill 不走该链，CLI 也不接受 false 的派生计划新建视频；不要绕过 CLI 或把旧增强文本自动叠加一次 IR。
 
-- `submit_unknown`：可能已被接受，禁止重发。通过供应商核实原 taskId 与操作的关系后，执行 `attach-task --root <story> --operation <id> --task <task-id> --confirm-task-link`，再 resume。CLI 无法替供应商证明任务归属。
+- `submit_unknown`：可能已被接受，默认不自动重发。找回原结果时，核实原 taskId 后 `attach-task --root <story> --operation <id> --task <task-id> --confirm-task-link` 再 resume。用户明确授权该段一次新生成时可用本地 operationId 执行正式重试，无需缺失的远端 ID；旧未知与占位保留，可能重复计费，详见 [一次性显式重试](docs/VIDEO_UNKNOWN_RETRY.md)。CLI 无法替供应商证明原任务归属。
 - `query_unknown`：保留已脱敏响应证据和原 taskId，随后再查。未知状态、缺失结果地址或错误响应不会当作 queued/success。
 - `generated` 加下载错误：只恢复下载。MP4 经流式大小限制、容器/时长/尺寸及 SHA-256 检查后原子保存；落盘回执允许恢复“已重命名但最终状态未写入”。校验不等于完整解码或视觉质量保证。
-- `failed/cancelled`：默认不再次提交。主动重生成必须指定单段和 `--retry-of <latest-operation-id>`，形成独立尝试；当前 true 请求继续使用同一 true 计划。旧 false 请求切换模式要创建新计划，并明确这是新请求。未知任务不允许重试。
+- `failed/cancelled`：默认不再次提交。主动重生成必须指定单段和 `--retry-of <latest-operation-id>`，形成独立尝试；当前 true 请求继续使用同一 true 计划。旧 false 请求切换模式要创建新计划，并明确这是新请求。未知视频的新尝试另需 `--accept-unknown-result --confirm`，仅限无 taskId 的最新操作。
 - 进程锁只在同一主机、原 PID 已不存在且记录完整时恢复。活进程或不明锁不按等待时长强删。损坏锁/中断的 recovery.lock 保留供人工检查。
 
 JSON 是默认输出，`--json` 可选。退出码：0 已完成本次动作；1 参数、契约或本地错误；2 任务失败、未知、轮询限额或下载未完成。日志不输出密钥、认证头或完整签名链接。故事清单中的输入 URL 是本地私有数据，勿提交真实故事目录。
@@ -202,3 +202,14 @@ node .\dist\cli\main.js images recover --root <story> --operation <operationId>
 ```
 
 images resume 可继续原授权内未提交项；recover 只恢复原结果，不创建。未知同步请求不重发，不虚构 task_id 查询。200 请求实际到达的离线验收不代表供应商可接收200并发。凭据、返回索引、人工处理及规格/磁盘限制见 [完整说明](docs/IMAGE_API_USAGE.md)。新测试命令：`npm run test:image-api`、`npm run test:image-api:process`。
+
+### 无远端 ID 的视频显式重试
+
+当前用户明确授权某段一次新尝试后，选择其本地 operationId：
+
+```text
+node E:\metasocli\dist\cli\main.js batch retry --root <story> --batch <batchId> --operation <oldLocalOperationId> --confirm --accept-unknown-result
+node E:\metasocli\dist\cli\main.js generate --root <story> --plan <planId> --segment <segmentId> --retry-of <oldLocalOperationId> --confirm --accept-unknown-result
+```
+
+旧请求可能受理并重复计费，旧未知继续占位；重复上述同一命令只沿用一个稳定新尝试。waiting_capacity 表示待空位，不是失败或已生成。完整状态、四并发衔接与范围约束见 [视频显式重试](docs/VIDEO_UNKNOWN_RETRY.md)，另一设备版本要求见 [修复构建部署](docs/NEW_DEVICE_RETRY_BUILD.md)。

@@ -46,7 +46,7 @@ try {
     if ($pack.files.path -notcontains "skills/metasocli-reference-images/references/$reference") { throw "Missing image Skill template/contract: $reference" }
   }
   if ($pack.files.path -notcontains 'skills/metasocli-reference-images/scripts/validate_handoff.py') { throw 'Missing image Skill handoff validator' }
-  foreach ($file in @('docs/CONTEXT_IR_WORKFLOW.md','dist/jobs/context-ir.js','dist/contracts/context-ir.js','dist/images/run.js','dist/images/client.js','docs/IMAGE_API_USAGE.md','scripts/connect-image-local.mjs')) {
+  foreach ($file in @('docs/CONTEXT_IR_WORKFLOW.md','dist/jobs/context-ir.js','dist/contracts/context-ir.js','dist/images/run.js','dist/images/client.js','docs/IMAGE_API_USAGE.md','scripts/connect-image-local.mjs','dist/jobs/video-retry.js','dist/contracts/video-retry.js','docs/VIDEO_UNKNOWN_RETRY.md')) {
     if ($pack.files.path -notcontains $file) { throw "Missing independent IR package resource: $file" }
   }
   $sentinels = @('story2libtv.cmd','node_modules/story-to-libtv/package.json','.codex/config.toml','.story2libtv-runtime/owner.json')
@@ -62,6 +62,8 @@ try {
   Invoke-Npm @('install','--global','--prefix',$prefix,'--offline','--ignore-scripts','--cache',$cache,$tarball)
   & $nodePath (Join-Path $prefix 'node_modules/metasocli/dist/cli/main.js') --version
   if ($LASTEXITCODE -ne 0) { throw 'Installed CLI did not start' }
+  $installedHelp = & $nodePath (Join-Path $prefix 'node_modules/metasocli/dist/cli/main.js') --help
+  if ($LASTEXITCODE -ne 0 -or ($installedHelp -join "`n") -notmatch 'batch retry' -or ($installedHelp -join "`n") -notmatch 'accept-unknown-result') { throw 'Installed CLI lacks the formal video retry entry' }
   if (-not (Test-Path -LiteralPath (Join-Path $prefix 'metasocli.cmd'))) { throw 'New command shim was not installed' }
   Invoke-Npm @('install','--global','--prefix',$prefix,'--offline','--ignore-scripts','--cache',$cache,$tarball)
   Invoke-Npm @('uninstall','--global','--prefix',$prefix,'--offline','--ignore-scripts','--cache',$cache,'metasocli')

@@ -29,7 +29,7 @@ it('does not write or call provider without generation authorization', async () 
   await expect(submit(f.root, f.plan.planId, 's1', false, { client })).rejects.toMatchObject({ code: 'GENERATION_NOT_AUTHORIZED' });
   expect(await listJobs(f.root)).toHaveLength(0); expect(client.creates).toBe(0);
 });
-it('unknown creation is sticky across restart and cannot be explicitly retried', async () => {
+it('unknown creation is sticky across restart and retry-of alone does not authorize a new unknown-result attempt', async () => {
   const f = await setup(), client = fake(async () => { throw new Error('connection reset after server accepted'); });
   const job = await submit(f.root, f.plan.planId, 's1', true, { client });
   expect(job.status).toBe('submit_unknown');

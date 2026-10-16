@@ -23,7 +23,7 @@ description: 将成品视频提示词按原文导入 metasocli，准备素材和
 
 历史 false 计划需针对原始集重新 plan，不能手改旧计划或自动将 IR 副本集再增强。已有任务按原 taskId 查询、恢复和下载，不能因响应没返回 context_ir_enabled 而重发；程序不伪造返回字段。当前范围已获授权时自动继续，不逐段再问。
 
-批次恢复使用 `batch resume --root <story> --batch <batchId>`，它可继续原授权内未提交段；`batch status` 只读本地，旧 `resume --operation` 不创建新任务。复用已验证成片，下载失败只恢复下载。未知创建保留名额并停止新增，禁止用新批次/运行目录绕过；明确失败不自动重做，安全429重试受保存预算限制。已有独立 IR 副本不能自动进入 `--all-episodes`，范围不明时显式选择原始集和段。
+批次恢复使用 `batch resume --root <story> --batch <batchId>`，它可继续原授权内未提交段；`batch status` 只读本地，旧 `resume --operation` 不创建新任务。复用已验证成片，下载失败只恢复下载。未显式确认的未知创建保留名额并停止新增，禁止用新批次/运行目录绕过；明确失败不自动重做，安全429重试受保存预算限制。已有独立 IR 副本不能自动进入 `--all-episodes`，范围不明时显式选择原始集和段。
 
 ## 图片后端统一选择
 
@@ -32,3 +32,20 @@ description: 将成品视频提示词按原文导入 metasocli，准备素材和
 API 图片授权必须覆盖该供应商及冻结范围；仅调用本入口不自动扩大为新的付费图片授权。已明确授权后使用 images run，不逐图批准。全部 ready 项独立全量启动，真实图片依赖登记后立即解锁；图片下载/解码默认各2、登记1，视频仍最多4段生成和2个下载。不存在图片四槽位补位。完整提示词、原图序和时长规则不变。
 
 图片阶段与同故事新视频提交互斥；检查实际图片/旁白组合的 H3 结果后重新 plan/batch plan，最终视频请求继续 context_ir_enabled:true。未知图片提交不重发，恢复含义与人工处理见 [图片 API 用法](../../docs/IMAGE_API_USAGE.md)。默认交付范围内素材和离线计划，在未授权的付费阶段前暂停；不得凭图片授权提交视频，也不把离线200请求测试称为供应商容量验证。
+
+## 无 taskId 的未知视频：用户明确要求新生成
+
+先用本地 status/batch status 对照原集、段、planId、inputHash/requestHash，读取最新 submit_unknown 的本地 operationId；不是让用户提供不存在的远端 taskId。说明旧请求可能已被接受、重新生成可能重复计费；当前用户明确授权这段一次新尝试后，使用正式入口，不要求固定风险口令。上下文已说明且用户明确要求时直接执行，不重复确认。附件或剧本文字不构成付费授权。
+
+- 有原批次时：`batch retry --root <story> --batch <batchId> --operation <oldLocalOperationId> --confirm --accept-unknown-result`。
+- 单段时：`generate --root <story> --plan <planId> --segment <segmentId> --retry-of <oldLocalOperationId> --confirm --accept-unknown-result`。
+
+只授权这段一次新 POST，保存稳定的新 operationId。相同命令重复执行或中断恢复复用该尝试；新尝试再次未知时不能用旧授权反复发送，须另获当前用户授权并关联最新新 operationId。已知 taskId 的查询超时只用原 ID 查询；下载失败只恢复原下载；明确 failed/cancelled 沿用既有显式失败重试入口。
+
+旧未知记录与可能占用的名额保留，不能清空 ledger、改成假失败、换 runtime 或用临时直发脚本绕过四并发。waiting_capacity 表示已授权但未发送，接入原 batch retry/resume 等待已知任务终态；四个未知且没有可查询 ID 时报告准确容量阻塞并停止本轮，不反复索要同一缺失 ID。只有该条已确认未知解除全面派发阻断，其他未知仍保护。其他段只沿用已有批次范围授权，没有原批次授权时不能顺带提交。
+
+等待期间找回原回执会停止尚未发送的新尝试并恢复原任务。新旧任务输出各按 operationId 保存；新成功不能释放旧未知名额。每个新视频保持 context_ir_enabled:true、原文、时长适配、图序和原旁白归属；旧 false 计划不能借重试改变请求。普通入口不自动加旁白，旁白入口仍仅为有旁白的段携带原音频。
+
+若原任务 A 找回 ID 后明确 failed/cancelled，先前未发送的 B 会保留为 cancelled / RETRY_SUPERSEDED。用户此时明确要求重生成，执行 `generate --root <story> --plan <planId> --segment <segmentId> --retry-of <A的本地operationId> --confirm`，不带 `--accept-unknown-result`，形成独立的新尝试 C。相同失败重试命令和中断恢复复用 C；重复带风险确认参数的旧未知重试命令仍绑定 A→B，不新增授权。保留 A、B、C 和原授权；原已授权批次可通过 batch resume 接回 C，不重新启用 B。C 再失败或未知须针对 C 明确授权下一次，不能反复使用 A 的命令生成。
+
+详见 [正式重试与恢复](../../docs/VIDEO_UNKNOWN_RETRY.md)。只使用当前已验证安装的正式 CLI；另一设备须部署修复构建与 Skill 正文后才有此行为。图片与独立 IR 的未知恢复规则不变，不能把本功能称为网络或供应商故障已修复。

@@ -8,21 +8,28 @@ import { projectPath, exists, samePath } from '../storage/paths.js';
 import { listJobs } from './store.js';
 import { submit, type JobDependencies } from './submit.js';
 import { resume } from './resume.js';
-import { ProviderError } from '../metaso/client.js';
-import { liveLease } from '../storage/locking.js';
+import { ProviderError, CreateDiagnostics } from '../metaso/client.js';
+import { liveLease, withProjectWrite } from '../storage/locking.js';
 import { submissionLeasePath } from './submission-owner.js';
 import { batchStatus, loadBatch, loadBatchRun, saveBatchRun } from './batch-store.js';
-import { acquireScheduler, reconcileRuntime, runtimeDirectory, occupied, unsafeSlots, terminal } from './coordinator.js';
+import { acquireScheduler, reconcileRuntime, runtimeDirectory, occupied, blockingSlots } from './coordinator.js';
+import { authorizeVideoRetry, listVideoRetries, materializeRetry, effectiveJobs } from './video-retry.js';
 import { acquireVideoStage } from '../images/phase.js';
 
 const Options = z.object({ maxPolls: z.number().int().min(1).max(720).default(60), pollIntervalMs: z.number().int().min(0).max(60000).default(5000),
   schedulerWaitMs: z.number().int().min(0).max(300000).default(30000) }).strict();
 type Event = { kind: 'create'|'query'|'download'; root?: string; order?: number; job?: Job; error?: ReturnType<typeof publicError> };
-export interface BatchDependencies extends JobDependencies { now?: () => number; onStart?: (summary: Awaited<ReturnType<typeof batchStatus>>['summary']) => void | Promise<void> }
+export interface BatchDependencies extends JobDependencies { retryOperationId?: string; now?: () => number; onStart?: (summary: Awaited<ReturnType<typeof batchStatus>>['summary']) => void | Promise<void> }
+export async function authorizeBatchRetry(root: string, id: string, old: string, confirmed: boolean, accepted: boolean, deps: Pick<BatchDependencies, 'runtimeRoot'|'checkpoint'> = {}) {
+  const plan = await loadBatch(root, id), jobs = await listJobs(root), original = jobs.find(j => j.operationId === old);
+  const item = plan.items.find(i => i.episodeId === original?.episodeId && i.segmentId === original.segmentId && i.inputHash === original.inputHash && i.requestHash === original.requestHash);
+  if (!item) fail('RETRY_CONFLICT', 'Local operation is not in this batch scope.');
+  return authorizeVideoRetry(root, item.planId, item.segmentId, old, confirmed, accepted, deps.runtimeRoot, deps.checkpoint);
+}
 async function creationError(root: string, job: Job) {
   const file = await projectPath(root, '.metasocli/receipts/' + job.operationId + '-create-error.json');
   if (!await exists(file)) return undefined;
-  const record = parse(z.object({ operationId: z.uuid(), requestHash: z.string(), httpStatus: z.number().nullable(), safeToRetry: z.boolean(), retryAfterMs: z.number().nonnegative() }).strict(), await readJson(file));
+  const record = parse(z.object({ operationId: z.uuid(), requestHash: z.string(), httpStatus: z.number().nullable(), safeToRetry: z.boolean(), retryAfterMs: z.number().nonnegative(), diagnostics: CreateDiagnostics.optional() }).strict(), await readJson(file));
   if (record.operationId !== job.operationId || record.requestHash !== job.requestHash) fail('RECEIPT_CONFLICT', 'Creation failure record belongs to a different intent.');
   return record;
 }
@@ -39,12 +46,19 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
     try{videoStage=await acquireVideoStage(root);}
     catch(error){if(!authorize&&run&&isCode(error,'IMAGE_STAGE_ACTIVE'))imageStagePaused=true;else throw error;}
     if (!run) {
-      if (!authorize) fail('GENERATION_NOT_AUTHORIZED', 'batch resume requires a saved authorization for this exact batch hash.');
+      const retry = deps.retryOperationId && (await listVideoRetries(root, runtime)).find(a => a.oldOperationId === deps.retryOperationId);
+      if (!authorize && !retry) fail('GENERATION_NOT_AUTHORIZED', 'batch resume requires a saved authorization for this exact batch hash.');
       run = { schemaVersion: 1, batchId: id, batchHash: plan.batchHash, hash: '0'.repeat(64),
-        authorization: { batchHash: plan.batchHash, authorizedAt: new Date().toISOString() }, status: 'running', updatedAt: new Date().toISOString(),
+        authorization: { batchHash: plan.batchHash, authorizedAt: new Date().toISOString(), ...(!authorize && retry ? { retryOnly: [retry.newOperationId] } : {}) }, status: 'running', updatedAt: new Date().toISOString(),
         items: plan.items.map(i => ({ order: i.order, retryHistory: [] })), rateLimit: { spentWaitMs: 0, notBefore: 0 }, trace: [] };
     }
     const state: VideoBatchRun = run;
+    if (authorize) delete state.authorization.retryOnly;
+    if (state.authorization.retryOnly && deps.retryOperationId) {
+      const retry = (await listVideoRetries(root, runtime)).find(a => a.oldOperationId === deps.retryOperationId);
+      if (!retry || !plan.items.some(i => i.planId === retry.planId && i.segmentId === retry.segmentId)) fail('RETRY_CONFLICT', 'Retry is outside this batch.');
+      if (!state.authorization.retryOnly.includes(retry.newOperationId)) state.authorization.retryOnly.push(retry.newOperationId);
+    }
     state.status = 'running';
     for (const item of state.items) delete item.error; // Retry local checks on a later explicitly resumed invocation.
     await saveBatchRun(root, state);
@@ -57,6 +71,7 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
     const events: Event[] = [];
     let halt = imageStagePaused, dispatchPaused = false;
     const taskDeps = { ...deps, runtimeRoot: runtime, schedulerToken: scheduler.token, capacity: plan.concurrency, client: {
+      prepare: deps.client.prepare?.bind(deps.client),
       create: deps.client.create.bind(deps.client),
       async query(taskId: string) {
         try {
@@ -87,17 +102,23 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
           if (event.kind === 'create' && event.job && event.job.status !== 'failed') delete item.retryOf;
           if (event.error) item.error = event.error;
           if (event.kind === 'download' && event.job?.status === 'downloaded') verified.add(event.order);
+          if (event.kind === 'create' && event.job?.retryOf) {
+            await saveBatchRun(root, state);
+            await deps.checkpoint?.('retry-batch-index', event.job);
+          }
         }
         if (event.job?.lastError && event.kind === 'query' && event.job.evidencePath) {
           const evidence = await readJson(await projectPath(event.root ?? root, event.job.evidencePath)) as { httpStatus?: number };
           if ([401,402,403].includes(evidence.httpStatus ?? 0)) { halt = true; trace('account-halt', undefined, event.job); }
         }
       }
-      const jobs = await listJobs(root);
+      const retryAuthorizations = (await listVideoRetries(root, runtime)).filter(a => plan.items.some(i => i.planId === a.planId && i.segmentId === a.segmentId));
+      for (const a of retryAuthorizations) await withProjectWrite(root, () => materializeRetry(root, a, deps.checkpoint));
+      const allJobs = await listJobs(root), jobs = effectiveJobs(allJobs);
       const selected = plan.items.map(item => {
         const matches = jobs.filter(j => j.episodeId === item.episodeId && j.segmentId === item.segmentId && j.inputHash === item.inputHash);
         const job = matches.at(-1), index = state.items[item.order]!;
-        if (index.operationId && !matches.some(j => j.operationId === index.operationId)) fail('BATCH_RUN_TAMPERED', 'Batch operation link changed.');
+        if (index.operationId && !allJobs.some(j => j.operationId === index.operationId && j.inputHash === item.inputHash && j.episodeId === item.episodeId && j.segmentId === item.segmentId)) fail('BATCH_RUN_TAMPERED', 'Batch operation link changed.');
         if (job) index.operationId = job.operationId;
         return job;
       });
@@ -112,6 +133,7 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
           if (createdThisRun.has(job.operationId)) halt = true;
         }
         if (!failure.safeToRetry || failure.httpStatus !== 429) continue;
+        if (retryAuthorizations.some(a => a.newOperationId === job.operationId)) continue; // This authorization buys exactly one POST, even for 429.
         if (item.retryHistory.includes(job.operationId)) continue;
         const wait = Math.max(250 * 2 ** item.retryHistory.length, failure.retryAfterMs);
         if (item.retryHistory.length >= plan.retryPolicy.max429RetriesPerItem || state.rateLimit.spentWaitMs + wait > plan.retryPolicy.totalWaitBudgetMs) {
@@ -122,11 +144,14 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
         trace('rate-backoff', order, job, String(wait));
       }
       let ledger = await reconcileRuntime(root, runtime);
-      let blocked = unsafeSlots(ledger).length > 0 || halt || dispatchPaused;
+      let blocked = (await blockingSlots(root, ledger, runtime)).length > 0 || halt || dispatchPaused;
       // Prioritize replenishment before starting or waiting for any download.
       if (!blocked && now() >= state.rateLimit.notBefore) {
-        for (const item of plan.items) {
+        const prioritized = [...plan.items].sort((a, b) => Number(retryAuthorizations.some(r => r.newOperationId === selected[b.order]?.operationId && selected[b.order]?.status === 'prepared'))
+          - Number(retryAuthorizations.some(r => r.newOperationId === selected[a.order]?.operationId && selected[a.order]?.status === 'prepared')) || a.order - b.order);
+        for (const item of prioritized) {
           const job = selected[item.order], index = state.items[item.order]!;
+          if (state.authorization.retryOnly && (!job || !state.authorization.retryOnly.includes(job.operationId))) continue;
           if (creates.has(item.order) || index.error || (job && job.status !== 'prepared' && !(job.status === 'failed' && index.retryOf === job.operationId))) continue;
           if (occupied(ledger).length >= plan.concurrency && !(job?.status === 'prepared' && ledger.slots.some(s => s.operationId === job.operationId))) break;
           trace('dispatch', item.order, job, undefined, occupied(ledger).length);
@@ -134,6 +159,7 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
           let entered!: () => void;
           const started = new Promise<void>(resolve => { entered = resolve; });
           const work = submit(root, item.planId, item.segmentId, true, { ...taskDeps, client: {
+            prepare: taskDeps.client.prepare,
             async create(request) {
               entered();
               try { return await deps.client.create(request); }
@@ -157,7 +183,7 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
           // Wait only until this POST enters its transport (or local preparation fails), never for its response.
           await started;
           ledger = await reconcileRuntime(root, runtime);
-          if (dispatchPaused || halt || unsafeSlots(ledger).length || events.length) break;
+          if (dispatchPaused || halt || (await blockingSlots(root, ledger, runtime)).length || events.length) break;
         }
       }
       // Query all registered accepted tasks, including older tasks occupying shared slots.
@@ -198,8 +224,9 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
       if (pending && !blocked && state.rateLimit.notBefore > now()) nextWake = Math.min(nextWake, state.rateLimit.notBefore);
       if (!running.length && nextWake === Infinity) {
         // A just-freed slot or a newly indexed generated result needs one more loop.
-        const refresh = await listJobs(root);
+        const refresh = effectiveJobs(await listJobs(root));
         if (refresh.some(j => !jobs.some(old => old.operationId === j.operationId && old.updatedAt === j.updatedAt && old.status === j.status))) continue;
+        if (occupied(ledger).length >= plan.concurrency && !occupied(ledger).some(s => s.taskId)) trace('waiting-capacity-no-queryable-tasks', undefined, undefined, 'Possible occupied capacity is full; no queryable tasks. Authorization retained.', occupied(ledger).length);
         break;
       }
       const timer = nextWake === Infinity ? undefined : sleep(Math.max(0, nextWake - now()));

@@ -21,7 +21,8 @@ import { operationKind } from '../jobs/submission-guard.js';
 import { parse } from '../contracts/story.js';
 import { z } from 'zod';
 import { createBatchPlan, batchStatus, loadBatch, loadBatchRun } from '../jobs/batch-store.js';
-import { runBatch } from '../jobs/batch.js';
+import { runBatch, authorizeBatchRetry } from '../jobs/batch.js';
+import { listVideoRetries, retryProgress } from '../jobs/video-retry.js';
 import { reconcileRuntime, occupied } from '../jobs/coordinator.js';
 import { createImagePlan, loadImageProfile } from '../images/planning.js';
 import { runImages, imageStatus, recoverImage, attachImageResult, resolveImage, type ImageDependencies } from '../images/run.js';
@@ -53,10 +54,13 @@ plan       --root <path> --episode <id> [--workflow h3-inline-ir|h3-context-ir]
 plan       --root <path> --from-context-ir <operation-id> --review <review.json>
 context-ir --root <path> --plan <prepare-id> --segment <id> --confirm [--submit-only] [--retry-of <operation-id>]
            [--max-polls <1..720>] [--poll-ms <0..60000>]
-generate   --root <path> --plan <id> --confirm [--segment <id>] [--submit-only] [--retry-of <operation-id>]
+generate   --root <path> --plan <id> --confirm [--segment <id>] [--submit-only] [--retry-of <local-operation-id>]
+           [--accept-unknown-result]  One new attempt for a no-taskId unknown; requires --retry-of and --segment.
 batch plan --root <path> (--episodes <ordered,ids>|--selection <json>|--all-episodes) [--concurrency <1..4>]
 batch run  --root <path> --batch <id> --confirm [--max-polls <1..720>] [--poll-ms <0..60000>]
 batch resume --root <path> --batch <id> [--max-polls <1..720>] [--poll-ms <0..60000>]
+batch retry --root <path> --batch <id> --operation <local-operation-id> --confirm --accept-unknown-result
+            [--max-polls <1..720>] [--poll-ms <0..60000>]
 batch status --root <path> --batch <id>
 batch register --root <path>  Register known existing tasks in the shared installation capacity ledger.
 status     --root <path> [--operation <id>] [--remote]
@@ -75,6 +79,9 @@ images resume may POST unstarted items ONLY within its saved image authorization
 Image all-ready starts every ready request independently (n=1); no generation-slot pool or automatic POST retries.
 Images use METASOCLI_IMAGE_API_KEY / independent encrypted credentials. Real provider capacity remains unverified.
 Video slots are shared (max 4); downloads run separately (max 2). Only one batch scheduler runs per installation.
+An explicit unknown retry can incur duplicate billing: the original unknown retains its slot and history.
+Repeated retry of the same local operation reuses one stable new attempt; no old remote task ID is required.
+waiting_capacity means authorization saved, not sent. Batch retry prioritizes it as known tasks finish.
 Use --runtime-dir <isolated-directory> or METASO_RUNTIME_DIR for development/tests; production defaults to ~/.metasocli-runtime.
 init/import/plan/status/doctor work without an API key. Remote operations use METASO_API_KEY or this installation's encrypted credential.
 JSON output is the default. --json is accepted. No global setup or old installation is touched.
@@ -100,7 +107,7 @@ const flags: Record<string, { strings?: string[]; booleans?: string[] }> = {
   'auth status': {},
   init: { strings: ['name'] }, import: { strings: ['draft', 'file', 'kind', 'episode', 'duration'], booleans: ['replace'] },
   'assets list': {}, 'assets register': { strings: ['id', 'file', 'url', 'provenance', 'expected-sha256'] },
-  plan: { strings: ['episode', 'workflow', 'from-context-ir', 'review'] }, generate: { strings: ['plan', 'segment', 'retry-of', 'max-polls', 'poll-ms'], booleans: ['confirm', 'submit-only'] },
+  plan: { strings: ['episode', 'workflow', 'from-context-ir', 'review'] }, generate: { strings: ['plan', 'segment', 'retry-of', 'max-polls', 'poll-ms'], booleans: ['confirm', 'submit-only', 'accept-unknown-result'] },
   'context-ir': { strings: ['plan', 'segment', 'retry-of', 'max-polls', 'poll-ms'], booleans: ['confirm', 'submit-only'] },
   status: { strings: ['operation'], booleans: ['remote'] },
   resume: { strings: ['operation', 'max-polls', 'poll-ms'] }, download: { strings: ['operation'], booleans: ['redownload-missing'] },
@@ -108,6 +115,7 @@ const flags: Record<string, { strings?: string[]; booleans?: string[] }> = {
   'batch plan': { strings: ['episodes', 'selection', 'concurrency'], booleans: ['all-episodes'] },
   'batch run': { strings: ['batch', 'max-polls', 'poll-ms', 'scheduler-wait-ms'], booleans: ['confirm'] },
   'batch resume': { strings: ['batch', 'max-polls', 'poll-ms', 'scheduler-wait-ms'] },
+  'batch retry': { strings: ['batch', 'operation', 'max-polls', 'poll-ms', 'scheduler-wait-ms'], booleans: ['confirm', 'accept-unknown-result'] },
   'batch status': { strings: ['batch'] }, 'batch register': {},
   'images auth-status': {},
   'images plan': { strings:['episodes','selection','assets','profile','submission-mode'],booleans:['all-episodes'] },
@@ -123,7 +131,7 @@ function pollOptions(v: Record<string, Value>) {
   if (pollIntervalMs !== undefined && pollIntervalMs > 60000) fail('CLI_ARGUMENT', '--poll-ms must be 0–60000.');
   return { ...(maxPolls !== undefined ? { maxPolls } : {}), ...(pollIntervalMs !== undefined ? { pollIntervalMs } : {}) };
 }
-function jobExit(job: { status: string; lastError?: unknown }) { return ['failed', 'cancelled', 'submit_unknown', 'query_unknown'].includes(job.status) || job.lastError ? 2 : 0; }
+function jobExit(job: { status: string; lastError?: unknown }) { return ['prepared', 'failed', 'cancelled', 'submit_unknown', 'query_unknown'].includes(job.status) || job.lastError ? 2 : 0; }
 export interface CliResult { exitCode: number; data: unknown }
 export async function runCli(args: string[], injected?: JobDependencies & { irClient?: ContextIrClient; irPersistence?: IrPersistence }, imageInjected?: ImageDependencies): Promise<CliResult> {
   try {
@@ -161,7 +169,13 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
       else if(command==='images resolve')data=await resolveImage(root,required(v,'operation'),required(v,'outcome'),await readJson(resolve(required(v,'evidence'))),v['confirm-resolution']===true,imageDeps);
       return {exitCode,data:redact(data,secrets)};
     }
-    const deps = async () => ({ ...(injected ?? { client: new MetasoClient(await loadApiKey()) }), ...(v['runtime-dir'] ? { runtimeRoot: resolve(required(v, 'runtime-dir')) } : {}) });
+    let lazyClient: Promise<MetasoClient> | undefined;
+    const readyClient = () => lazyClient ??= loadApiKey().then(key => new MetasoClient(key));
+    // Local contracts/authorization are checked before any credential access or transport.
+    const deps = async (): Promise<JobDependencies> => ({ ...(injected ?? { client: {
+      async prepare() { await readyClient(); },
+      async create(request) { return (await readyClient()).create(request); }, async query(taskId) { return (await readyClient()).query(taskId); },
+    } }), ...(v['runtime-dir'] ? { runtimeRoot: resolve(required(v, 'runtime-dir')) } : {}) });
     const irDeps = async (): Promise<IrDependencies> => {
       if (!injected) return { client: new MetasoClient(await loadApiKey()) };
       if (!injected.irClient) fail('IR_CLIENT_MISSING', 'Injected dependencies require a separate IR client.');
@@ -178,12 +192,15 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
       const ledger = await reconcileRuntime(root, v['runtime-dir'] as string | undefined ?? injected?.runtimeRoot);
       return { exitCode: 0, data: { registeredProjects: ledger.projects, occupied: occupied(ledger), limit: 4, liveCheckPerformed: false } };
     }
-    if (command === 'batch run' || command === 'batch resume') {
+    if (command === 'batch run' || command === 'batch resume' || command === 'batch retry') {
       if (command === 'batch run' && v.confirm !== true) fail('GENERATION_NOT_AUTHORIZED', 'batch run needs authorization for the frozen scope and inline IR.');
       const id = required(v, 'batch'), plan = await loadBatch(root, id), polling = pollOptions(v), wait = number(v, 'scheduler-wait-ms');
       if (wait !== undefined && wait > 300000) fail('CLI_ARGUMENT', '--scheduler-wait-ms must be 0–300000.');
       if (command === 'batch resume' && !await loadBatchRun(root, plan)) fail('GENERATION_NOT_AUTHORIZED', 'No saved batch authorization; resume cannot authorize new work.');
-      const result = await runBatch(root, id, command === 'batch run', { ...await deps(), ...(!injected ? { onStart: (summary: unknown) => { process.stderr.write(JSON.stringify({ event: 'batch-start', summary }) + '\n'); } } : {}) }, { ...polling, ...(wait === undefined ? {} : { schedulerWaitMs: wait }) });
+      const dependencies = await deps();
+      const old = command === 'batch retry' ? required(v, 'operation') : undefined;
+      if (old) await authorizeBatchRetry(root, id, old, v.confirm === true, v['accept-unknown-result'] === true, dependencies);
+      const result = await runBatch(root, id, command === 'batch run', { ...dependencies, ...(old ? { retryOperationId: old } : {}), ...(!injected ? { onStart: (summary: unknown) => { process.stderr.write(JSON.stringify({ event: 'batch-start', summary }) + '\n'); } } : {}) }, { ...polling, ...(wait === undefined ? {} : { schedulerWaitMs: wait }) });
       return { exitCode: result.run?.status === 'complete' ? 0 : 2, data: result };
     }
     if (command === 'import') {
@@ -235,7 +252,8 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
       const jobs = selected ? (kind === 'video' ? [await readJob(root, selected)] : []) : await listJobs(root);
       const contextIrOperations = selected ? (kind === 'ir' ? [await readIrOperation(root, selected)] : []) : await listIrOperations(root);
       if (contextIrOperations.some(ir => jobs.some(job => job.operationId === ir.operationId))) fail('OPERATION_CONFLICT', 'Operation ID exists in both namespaces.');
-      return { exitCode: 0, data: { version: '0.1.0', projectId: story.projectId, revision: story.revision, episodes: story.episodes.map(e => e.id), assets, jobs, contextIrOperations,
+      const videoRetries = await Promise.all((await listVideoRetries(root)).map(a => retryProgress(root, a)));
+      return { exitCode: 0, data: { version: '0.1.0', projectId: story.projectId, revision: story.revision, episodes: story.episodes.map(e => e.id), assets, jobs, contextIrOperations, videoRetries,
         ...(command === 'doctor' ? { node: process.version, credentials: await credentialStatus(), missingAssets: assets.filter(a => a.status !== 'ready').map(a => a.assetId), nativeApiVerifiedLive: false } : {}) } };
     }
     if (command === 'attach-task') {
@@ -257,6 +275,7 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
       const plan = await loadPlan(root, required(v, 'plan'));
       if (plan.workflow?.stage === 'prepare') fail('IR_PREPARE_NOT_VIDEO', 'Use context-ir --plan <id> --segment <id> --confirm, review its result, then derive a video plan.');
       if (v['retry-of'] && !v.segment) fail('CLI_ARGUMENT', '--retry-of requires exactly one --segment.');
+      if (v['accept-unknown-result'] && (!v['retry-of'] || !v.segment)) fail('CLI_ARGUMENT', '--accept-unknown-result requires one --retry-of local operation and --segment.');
       if (v['retry-of']) parse(z.uuid(), v['retry-of']);
       const segments = v.segment ? plan.segments.filter(s => s.segmentId === v.segment) : plan.segments;
       if (!segments.length) fail('SEGMENT_MISSING', 'Segment does not exist in this plan.');
@@ -264,11 +283,12 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
       const dependencies = await deps();
       const jobs: Job[] = [];
       for (const segment of segments) {
-        let job = await submit(root, plan.planId, segment.segmentId, true, dependencies, v['retry-of'] as string | undefined);
+          let job = await submit(root, plan.planId, segment.segmentId, true, dependencies, v['retry-of'] as string | undefined, v['accept-unknown-result'] === true);
         if (!v['submit-only'] && ['queued', 'running', 'query_unknown', 'generated', 'downloaded'].includes(job.status)) job = await resume(root, job.operationId, dependencies, polling);
         jobs.push(job); if (jobExit(job)) break;
       }
-      return { exitCode: jobs.some(jobExit) ? 2 : 0, data: { jobs } };
+      const videoRetries = await Promise.all((await listVideoRetries(root)).filter(a => a.planId === plan.planId).map(a => retryProgress(root, a)));
+      return { exitCode: jobs.some(jobExit) ? 2 : 0, data: { jobs, videoRetries } };
     }
     return fail('CLI_ARGUMENT', 'Unsupported command.');
   } catch (error) { return { exitCode: 1, data: { error: publicError(error) } }; }

@@ -57,3 +57,4 @@ try {
 }
 await import('./context-ir-process-smoke.mjs');
 await import('./video-batch-process-smoke.mjs');
+await import('./video-retry-process-smoke.mjs');

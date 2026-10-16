@@ -81,7 +81,7 @@ export async function resume(root: string, operationId: string, deps: JobDepende
   const downloadLease = options.download ? await acquireLease(await projectPath(root, '.metasocli/downloads/' + operationId + '.lock')) : undefined;
   try {
     let job = await readJob(root, operationId);
-    if (!job.taskId) fail(job.status === 'prepared' ? 'NOT_SUBMITTED' : 'SUBMIT_UNKNOWN', 'No confirmed task ID. Recover the original task ID; do not resubmit.');
+    if (!job.taskId) fail(job.status === 'prepared' ? 'NOT_SUBMITTED' : 'SUBMIT_UNKNOWN', 'No confirmed task ID; resume cannot create. Recover the original ID, or explicitly authorize one new video attempt with generate --retry-of / batch retry --accept-unknown-result.');
     const forOutput = options.redownloadMissing && job.status === 'downloaded' ? { ...job, status: 'generated' as const, output: undefined } : job;
     const existing = await reconcileOutput(root, forOutput);
     if (existing) return withProjectWrite(root, async () => {

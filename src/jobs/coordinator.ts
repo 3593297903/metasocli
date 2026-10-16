@@ -10,6 +10,7 @@ import { readJson, writeJson } from '../storage/io.js';
 import { canonicalSha256 } from '../storage/canonical.js';
 import { liveLease, serialized, waitLease } from '../storage/locking.js';
 import { listJobs } from './store.js';
+import { listVideoRetries } from './video-retry.js';
 
 const Slot = z.object({ root: z.string(), projectId: z.uuid(), operationId: z.uuid(), requestHash: Hash, inputHash: Hash,
   taskId: z.string().optional(), status: z.enum([...JobSchema.shape.status.options, 'reserved']), updatedAt: z.iso.datetime() }).strict();
@@ -20,6 +21,11 @@ export type SlotRecord = z.infer<typeof Slot>;
 export const terminal = (status: string) => ['generated', 'downloaded', 'failed', 'cancelled'].includes(status);
 export const occupied = (ledger: LedgerState) => ledger.slots.filter(s => !terminal(s.status));
 export const unsafeSlots = (ledger: LedgerState) => ledger.slots.filter(s => ['submit_unknown', 'query_unknown'].includes(s.status));
+/** Only this project's exact durable acknowledgements lift the dispatch halt; never the slot. */
+export async function blockingSlots(root: string, ledger: LedgerState, runtime?: string) {
+  const acknowledged = new Set((await listVideoRetries(root, runtimeDirectory(runtime))).map(a => a.oldOperationId));
+  return unsafeSlots(ledger).filter(s => !samePath(s.root, root) || s.status !== 'submit_unknown' || !!s.taskId || !acknowledged.has(s.operationId));
+}
 export function runtimeDirectory(injected?: string) { return resolve(injected ?? process.env.METASO_RUNTIME_DIR ?? join(homedir(), '.metasocli-runtime')); }
 async function readLedger(runtime: string): Promise<LedgerState> {
   const file = await safePath(join(runtime, 'video-ledger.json')), marker = await safePath(join(runtime, 'owner.json'));
@@ -31,6 +37,8 @@ async function readLedger(runtime: string): Promise<LedgerState> {
   if (canonicalSha256(base) !== hash) fail('COORDINATOR_TAMPERED', 'Shared reservation hash mismatch.');
   return ledger;
 }
+/** Read-only inspection for status; no registration, synchronization or capacity release. */
+export async function inspectRuntime(runtime?: string) { return readLedger(runtimeDirectory(runtime)); }
 async function saveLedger(runtime: string, ledger: LedgerState) {
   const { hash: _, ...base } = ledger; ledger.hash = canonicalSha256(base);
   await writeJson(await safePath(join(runtime, 'video-ledger.json')), ledger);

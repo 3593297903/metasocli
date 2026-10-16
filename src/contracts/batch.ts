@@ -11,7 +11,7 @@ export const BatchPlan = z.object({ schemaVersion: z.literal(1), batchId: z.uuid
   items: z.array(BatchItem).min(1),
 }).strict();
 export const BatchRun = z.object({ schemaVersion: z.literal(1), batchId: z.uuid(), batchHash: Hash, hash: Hash,
-  authorization: z.object({ batchHash: Hash, authorizedAt: z.iso.datetime() }).strict(),
+  authorization: z.object({ batchHash: Hash, authorizedAt: z.iso.datetime(), retryOnly: z.array(z.uuid()).min(1).optional() }).strict(),
   status: z.enum(['running','paused','needs_attention','partial_failed','complete']), updatedAt: z.iso.datetime(),
   items: z.array(z.object({ order: z.number().int().nonnegative(), operationId: z.uuid().optional(),
     retryOf: z.uuid().optional(), retryHistory: z.array(z.uuid()), error: z.object({ code: z.string(), message: z.string() }).strict().optional(),
