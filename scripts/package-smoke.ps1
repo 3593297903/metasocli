@@ -1,3 +1,6 @@
+[CmdletBinding()]
+param([ValidateRange(1,8)][int]$TestWorkers = 2)
+
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $nodePath = (Get-Command node.exe).Source
@@ -28,7 +31,10 @@ try {
   if (Get-Command story2libtv,libtv -ErrorAction SilentlyContinue) { throw 'Old CLI unexpectedly visible in isolated PATH' }
   Set-Location -LiteralPath $sourceRoot
   Invoke-Npm @('ci','--offline','--ignore-scripts','--cache',$cache)
-  Invoke-Npm @('run','check')
+  Invoke-Npm @('run','build')
+  # Bound offline test workers independently of image/video generation concurrency.
+  & $nodePath $npmPath test -- ("--maxWorkers=" + $TestWorkers)
+  if ($LASTEXITCODE -ne 0) { throw 'Offline package tests failed' }
   $packText = & $nodePath $npmPath pack --ignore-scripts --json --cache $cache
   if ($LASTEXITCODE -ne 0) { throw 'npm pack failed' }
   $pack = ($packText -join "`n" | ConvertFrom-Json)[0]
@@ -37,14 +43,18 @@ try {
   $skillFiles = @($pack.files.path | Where-Object { $_ -match '^skills/[^/]+/SKILL.md$' })
   # Keep the isolated Windows PowerShell 5.1 run independent of the source-file code page.
   $narrationSkill = 'metasocli-video-prompts-' + [string][char]0x65C1 + [string][char]0x767D
-  $expectedSkills = @('metasocli','metasocli-video-prompts',$narrationSkill,'metasocli-prompt-engine','metasocli-reference-images')
-  if ($skillFiles.Count -ne $expectedSkills.Count) { throw 'Expected exactly five independent bundled Skills' }
+  $expectedSkills = @('metasocli','metasocli-video-prompts',$narrationSkill,'metasocli-prompt-engine','metasocli-reference-images','metasoclitk')
+  if ($skillFiles.Count -ne $expectedSkills.Count) { throw 'Expected exactly six independent bundled Skills' }
   foreach ($skill in $expectedSkills) {
     if ($pack.files.path -notcontains "skills/$skill/SKILL.md") { throw "Missing bundled Skill: $skill" }
   }
   foreach ($reference in @('character-board.md','scene-board.md','prop-board.md','first-frame.md','shared-visual-policy.md','handoff-contract.md')) {
     if ($pack.files.path -notcontains "skills/metasocli-reference-images/references/$reference") { throw "Missing image Skill template/contract: $reference" }
   }
+  foreach ($reference in @('visual-style.md','character-board.md','scene-board.md','prop-board.md')) {
+    if ($pack.files.path -notcontains "skills/metasoclitk/references/$reference") { throw "Missing metasoclitk template: $reference" }
+  }
+  if ($pack.files.path -notcontains 'docs/METASOCLITK_DEPLOYMENT.md') { throw 'Missing metasoclitk deployment instructions' }
   if ($pack.files.path -notcontains 'skills/metasocli-reference-images/scripts/validate_handoff.py') { throw 'Missing image Skill handoff validator' }
   foreach ($file in @('docs/CONTEXT_IR_WORKFLOW.md','dist/jobs/context-ir.js','dist/contracts/context-ir.js','dist/images/run.js','dist/images/client.js','docs/IMAGE_API_USAGE.md','scripts/connect-image-local.mjs','dist/jobs/video-retry.js','dist/contracts/video-retry.js','docs/VIDEO_UNKNOWN_RETRY.md')) {
     if ($pack.files.path -notcontains $file) { throw "Missing independent IR package resource: $file" }

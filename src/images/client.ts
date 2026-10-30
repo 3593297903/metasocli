@@ -23,7 +23,7 @@ export class YicImageClient implements ImageClient {
       const form=new FormData();for(const [key,value]of Object.entries(fields))form.append(key,String(value));
       for(const reference of input.references){const file=await projectPath(root,reference.path);
         if((await streamHash(file,profile.maxImageBytes)).sha256!==reference.sha256)fail('IMAGE_INPUT_CHANGED','Image reference snapshot changed.');
-        form.append(input.references.length===1?'image':'images',await openAsBlob(file,{type:reference.mime}),reference.assetId+({ 'image/png':'.png','image/jpeg':'.jpg','image/webp':'.webp'}[reference.mime]));
+        form.append(input.references.length===1?'image':'image[]',await openAsBlob(file,{type:reference.mime}),reference.assetId+({ 'image/png':'.png','image/jpeg':'.jpg','image/webp':'.webp'}[reference.mime]));
       }
       body=form; // Native FormData supplies the boundary; file-backed Blobs avoid N large buffers.
     }

@@ -39,6 +39,17 @@ $metasocli-video-prompts
 
 用户级入口可在后续消息或新建任务中使用。若当前输入框列表未刷新，清空旧的技能名后重新输入；仍未出现时重启 Codex。新建视频故事既可使用 `E:\metasocli\projects/<故事名>`，也可由用户指定其他独立故事目录。入口依赖本机 `E:\metasocli` 安装，移动或重新安装后需同步更新。发现规则见 [Codex 官方技能文档](https://learn.chatgpt.com/docs/build-skills)。
 
+需要 jianc 式资产图时使用独立入口 [metasoclitk](skills/metasoclitk/SKILL.md)：
+
+```text
+$metasoclitk
+这里粘贴完整的视频提示词，或指定提示词文件和独立故事目录。
+```
+
+它复用普通成品提示词入口，在新技能内部用半写实奇幻CG设计板规则完全替换原人物、场景、道具的模板读取与配方组装：人物为面部正侧特写、资料区及正侧背全身五视图；场景为全景、4或8处细节、六类资料及空间机位示意；道具为三分之四主图、结构视图、材质及使用关系。每项直接使用新配方生成，不先画旧类型再转换。完整规则保存在本包，不依赖 jianc 原项目或示例素材，不改变原入口。默认不自动附加旁白；明确要求统一旁白时复用原旁白规则。图片仍使用 gpt-image-2.5 API/all-ready，视频仍使用 H3 inline Context IR 和最多4段持续补位；生成授权与恢复规则不变。
+
+`metasoclitk` 是原有五份项目入口之外的新增入口，项目发现目录为 `.agents/skills/metasoclitk/`。本机跨项目入口单独安装到 `C:\Users\Administrator\.codex\skills\metasoclitk/`，读取本包正文及模板，不复制凭据或业务图片。迁移到其他设备时需将入口指向实际安装目录；Git克隆不会自动安装用户级入口。新设备及已有设备按 [metasoclitk 安装与升级](docs/METASOCLITK_DEPLOYMENT.md) 获取包含本技能的提交、构建并验证。安装验证不包含付费生图或视频效果验收。
+
 需要统一旁白声线时使用独立变体，原入口保持原样：
 
 ```text

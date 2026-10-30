@@ -53,7 +53,7 @@ it('unlocks real ordered edits without waiting for unrelated slow generation; re
   const f=await imageFixture(4,{'asset-003':['asset-001','asset-000']}),plan=await planFor(f.root),calls:string[]=[],forms:string[][]=[];
   let releaseSlow!:(r:Response)=>void;const slow=new Promise<Response>(r=>{releaseSlow=r;});
   const client=new YicImageClient('fake-image-key',async(url,init)=>{
-    if(String(url).endsWith('/edits')){const form=init!.body as FormData;const files=form.getAll('images') as File[];forms.push(files.map(x=>x.name));expect(form.get('image')).toBeNull();
+    if(String(url).endsWith('/edits')){const form=init!.body as FormData;const files=form.getAll('image[]') as File[];forms.push(files.map(x=>x.name));expect(form.get('image')).toBeNull();
       expect(await files[0]!.arrayBuffer().then(b=>sha256Hex(Buffer.from(b)))).toBe(sha256Hex(png(1024,1024,1)));
       expect(await files[1]!.arrayBuffer().then(b=>sha256Hex(Buffer.from(b)))).toBe(sha256Hex(png(1024,1024,0)));calls.push('edit');releaseSlow(imageResponse(2));return imageResponse(3);}
     const value=JSON.parse(init!.body as string),id=value.prompt.split(' ')[0];calls.push(id);if(id==='asset-002')return slow;return imageResponse(Number(id.slice(-3)));

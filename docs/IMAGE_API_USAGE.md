@@ -2,7 +2,7 @@
 
 本项目默认使用独立 `yiciyuang` 图片后端，请求模型固定 `gpt-image-2.5`。它是供应商别名，请求该名称不证明底层型号。已实现本地 all-ready 工作流；真实生成效果、账户权限、余额、并发/RPM、连接时限和 URL 有效期以实际账户和验收记录为准。
 
-接口依据是公开[专属文档](https://newapi.yiciyuang.com/docs/exclusive-gpt-image-2)：无参考图 POST `https://api.yiciyuang.com/v1/images/generations` JSON；有参考图 POST `/v1/images/edits` multipart，单文件 `image`、多文件按依赖顺序重复 `images`。每资产一个完整 prompt、n=1。多文件编码仍待真实验收；没有批量/轮询/task_id 协议，没有自动 POST 重试。
+接口依据是公开[专属文档](https://newapi.yiciyuang.com/docs/exclusive-gpt-image-2)：无参考图 POST `https://api.yiciyuang.com/v1/images/generations` JSON；有参考图 POST `/v1/images/edits` multipart，单文件 `image`、多文件按依赖顺序重复 `image[]`。每资产一个完整 prompt、n=1。多文件字段已于2026-10-19以image[]取得真实成功回执并登记文件，不能据此承诺所有供应商请求均成功；没有批量/轮询/task_id 协议，没有自动 POST 重试。
 
 ## 准备配置和独立凭据
 
