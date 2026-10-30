@@ -1,0 +1,4 @@
+interface:
+  display_name: "metasoclitk"
+  short_description: "沿用成品提示词流程，用半写实奇幻CG人物、场景与道具设计板准备资产图"
+  default_prompt: "使用 $metasoclitk 读取完整视频提示词，按 jianc 风格准备人物、场景和道具资产图，并沿用原流程完成视频计划。"
