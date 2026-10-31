@@ -79,6 +79,52 @@ node E:\metasocli\dist\cli\main.js images retry --root <story> --operation <id> 
 
 同步 HTTP 无供应商查询契约，关机可能使未返回请求永久未知；CLI 不提供常驻后台保证。所有 URL 下载均不携带图片 Key，拒绝未验证重定向。标准输出对密钥和链接脱敏，原始回执仅本地用于恢复。
 
+### 图片等待窗口（2026-10-31 调整为300秒）
+
+图片创建请求默认等待300秒（`generationTimeoutMs: 300000`），有效总时限为 `min(generationTimeoutMs, 300000)`。正式客户端通过锁定版本的 undici、请求级 dispatcher，将底层响应头/响应体等待与该有效时限对齐。旧计划即使冻结了600秒或更长的值，更新后的客户端新发出的请求也最多等待300秒；旧计划字段、哈希、请求和回执保持不变。显式配置的更短时限仍生效，已经启动的旧进程不受此次构建影响。
+
+计时从每项创建请求发起时开始，覆盖该请求及其响应体接收，不是整批工作流或Codex聊天的总耗时。只作用于图片创建请求，沿用当前连接/代理 dispatcher，不修改全局网络设置或视频/独立图片下载请求；普通 CLI 无需额外 `--import` 临时脚本。升级需按锁文件安装依赖并重新构建。
+
+HTTP 400 的完整回执若包含已知 `upstream_text_reply`，状态信息会指出供应商返回了文字而非图片。完整原文仍保存在该 operation 的 `response.bin`，不会把任意供应商文本、提示词或 URL 复制到公共错误信息。该诊断不证明未扣费，不将未知状态改为可自动重试；恢复不会重新 POST。
+
+连接错误仍为 `IMAGE_TRANSPORT_UNKNOWN`，保留旧请求且不自动重发；诊断只记录允许名单中的错误码（如 `UND_ERR_HEADERS_TIMEOUT`、`ECONNRESET`）、总时限标识和实际有效时限，不输出原始异常消息、认证头或签名链接。完整HTTP错误响应仍按原样保存；达到300秒后停止等待不代表供应商已经停止生成。
+
 ## 离线验证
 
 在项目目录并将 TMP/TEMP 设为 `.work/image-api-20260924/tmp` 后：`npm run build`、`npm test`、`npm run test:image-skill`、`npm run test:process`、`npm run test:image-api`、`npm run test:image-api:process`。最后一项启动并强制终止自己的假客户端子进程；不需要真实 Key。结果和环境限制见 [实施报告](IMAGE_API_INTEGRATION_IMPLEMENTATION_REPORT.md)。
+
+
+## 用户明确再次生成：一次性图片计划重试
+
+默认未知图片请求仍禁止自动重发。只有当前用户明确要求再次生成，且已说明可能重复计费时，使用以下正式入口；不把502改成假失败，不伪造供应商证据。
+
+先完成新设计及全部import（变更配方使用新assetId并保留原文历史），然后离线建立一个原计划的后继：
+
+```powershell
+node E:\metasocli\dist\cli\main.js images plan --root <story> --episodes <ordered,ids> --submission-mode all-ready --restart-of <previousImagePlanId>
+node E:\metasocli\dist\cli\main.js images run --root <story> --plan <newImagePlanId> --confirm --accept-unknown-result
+```
+
+原计划只能绑定一个已授权后继。新计划冻结当前素材配方、引用、范围和请求预算；run保存原未知operationId与requestHash的明确接受记录。旧未知、原回执、请求占位和成功图片全部保留；只将原计划中确认从未进入提交的等待项标记superseded。旧计划不能继续派发，新后继中同一素材每项至多一个新operationId；同assetId的新尝试保存retryOf和单项授权。其他项目或新一轮出现的未知仍阻断未发送项。重试需要用户当前授权，不能自动循环建立后继。
+
+恢复只用 `images resume --root <story> --plan <newImagePlanId>`；不再次新建后继，不重新发已提交项。新尝试再次502/断线时仍保留为submit_unknown；先保存已返回的其他结果，再报告准确缺项。该功能不修复供应商网关故障，也不承诺并发容量或底层模型。
+
+### 明确任务中断的原始API证据
+
+`images resolve`另支持`source.kind=provider-api-response`，仅用于`outcome=failed`。`source.reference`必须是本operation的`.metasocli/image-receipts/<id>/complete.json`。CLI实际核对请求身份、完整回执与原始响应字节哈希，并要求HTTP503及`error.type=server_error`、`error.code=task_interrupted`；普通502/503、无明确终态或不完整响应继续保持未知。通过后记录原始bodySha256与providerResponse，independentlyVerified仅表示该原始API证据已核对，不证明未扣费或底层模型。该操作只解除已明确终止任务造成的阻塞，不授权重新生成该失败项；resume只继续原授权内尚未提交项。
+
+原始API证据还可核对HTTP500/new_api_error/convert_request_failed，且message以image is required开头、原请求为带参考文件的images/edits。该明确的生成前参数转换拒绝仅可解除为not-created；CLI核对相同原始响应字节与请求身份，保留供应商request id。修复多图字段须使用新operationId和正式授权，不能覆写旧请求或把通用500解释成未受理。
+
+## 本次图片计划专属确认：保留另一项目旧未知（2026-10-29）
+
+默认仍由任意未处理的图片未知请求阻止新派发。用户明确要求忽略指定旧项目、继续当前已冻结图片范围时，可使用：
+
+```powershell
+node E:\metasocli\dist\cli\main.js images run --root <story> --plan <imagePlanId> --confirm --accept-existing-unknown <oldOperationId,...>
+```
+
+确认绑定当前planId/planHash以及旧请求的root、projectId、planId、operationId、assetId、fingerprint、requestHash，写入本次图片run的已哈希授权后才可能提交。既有未派发run保留原operationId。旧项目、未知任务、原回执和共享账本占位均保留；不会查询或重发旧请求，也不将其改为失败。
+
+只能确认另一项目中已存在的submit_unknown；当前项目或本轮新出现的未知仍阻止后续派发。未列出的其他未知仍阻止派发。其他计划不继承本次确认，不能清账本、更换quotaGroup/runtime或直发API代替正式入口。未提供本次明确确认时旧行为不变。
+
+恢复使用原`images resume --root <story> --plan <imagePlanId>`，沿用保存的原范围授权和旧请求身份确认；resume不能新增确认。若旧请求身份变化或记录消失，拒绝继续并保留所有证据。此确认只允许本次图片计划继续，既不证明旧请求未受理，也不承诺供应商容量或授权视频生成。

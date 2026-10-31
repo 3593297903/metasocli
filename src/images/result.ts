@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { parse } from '../contracts/story.js';
-import { fail } from '../core/errors.js';
+import { fail, MetasoError } from '../core/errors.js';
 import { canonicalSha256, sha256Hex } from '../storage/canonical.js';
 import { projectPath, exists } from '../storage/paths.js';
 import { readJson, readStable, writeJson, atomicWrite } from '../storage/io.js';
@@ -11,6 +11,7 @@ import { BodyReceipt, ImageJob, ImageReceipt, type ImageJobRecord, type ImagePla
 import { receiptFile, readBodyReceipt, saveImageJob, readImageJob } from './store.js';
 import { streamResponse, streamHash, type DiskBudget, type Semaphore } from './stream.js';
 import { validateImagePlan } from './planning.js';
+import { effectiveImageTimeout, imageTransportFailure, imageTransportReason } from './transport.js';
 export type ImageCheckpoint=(point:string,job:ImageJobRecord)=>Promise<void>;
 export interface ResultContext {budget:DiskBudget;decode:Semaphore;download:Semaphore;registration:Semaphore;fetcher?:Fetch;checkpoint?:ImageCheckpoint;onResponseChunk?:(operationId:string,bytes:number)=>void}
 export async function saveImageResponse(root:string,job:ImageJobRecord,response:Response,profile:Profile,ctx:ResultContext){
@@ -19,7 +20,10 @@ export async function saveImageResponse(root:string,job:ImageJobRecord,response:
   job.responseHeadersAt=responseHeadersAt;
   await ctx.checkpoint?.('response-before',job);
   await writeJson(await projectPath(root,receiptFile(job.operationId,'headers.json')),{operationId:job.operationId,requestHash:job.requestHash,httpStatus:response.status,headers,responseHeadersAt});
-  const path=receiptFile(job.operationId,'response.bin'),body=await streamResponse(response,await projectPath(root,path),profile.maxResponseBytes,ctx.budget,n=>ctx.onResponseChunk?.(job.operationId,n));
+  const path=receiptFile(job.operationId,'response.bin');
+  let body:Awaited<ReturnType<typeof streamResponse>>;
+  try {body=await streamResponse(response,await projectPath(root,path),profile.maxResponseBytes,ctx.budget,n=>ctx.onResponseChunk?.(job.operationId,n));}
+  catch(error){if(error instanceof MetasoError||!imageTransportReason(error))throw error;return imageTransportFailure(error,effectiveImageTimeout(profile.generationTimeoutMs));}
   const base={schemaVersion:1 as const,operationId:job.operationId,requestHash:job.requestHash!,path,...body,httpStatus:response.status,headers,responseHeadersAt,responseSavedAt:new Date().toISOString()};
   await writeJson(await projectPath(root,receiptFile(job.operationId,'complete.json')),parse(BodyReceipt,{...base,hash:canonicalSha256(base)}));
   await ctx.checkpoint?.('response-saved',job);
@@ -50,7 +54,15 @@ export async function receiveImage(root:string,job:ImageJobRecord,profile:Profil
     if(raw.length!==body.bytes||sha256Hex(raw)!==body.sha256)fail('IMAGE_RECEIPT_CONFLICT','Complete response bytes changed.');
     job.responseHeadersAt=body.responseHeadersAt;job.responseSavedAt=body.responseSavedAt;
     if([401,402,403,429].includes(body.httpStatus)){job.status='rejected';job.error={code:'IMAGE_CREATE_REJECTED',message:`Image provider returned HTTP ${body.httpStatus}; no automatic POST retry.`};await saveImageJob(root,job);return;}
-    if(body.httpStatus<200||body.httpStatus>=300)fail('IMAGE_SUBMIT_UNKNOWN',`Image HTTP ${body.httpStatus} does not prove creation was rejected.`);
+    if(body.httpStatus<200||body.httpStatus>=300){
+      // Only expose a known code, never provider text that may echo prompts or secrets.
+      let hint='';
+      if(body.httpStatus===400&&raw.length<=16384){try{
+        const error=JSON.parse(raw.toString('utf8'))?.error;
+        if(error?.code==='upstream_text_reply')hint=' Provider code upstream_text_reply: text was returned instead of an image; inspect the saved response for details.';
+      }catch{/* The complete original body remains available even when it is not JSON. */}}
+      fail('IMAGE_SUBMIT_UNKNOWN',`Image HTTP ${body.httpStatus} does not prove creation was rejected.${hint}`);
+    }
     let value:unknown;try{value=JSON.parse(raw.toString('utf8'));}catch{return fail('IMAGE_RESPONSE_CONTRACT','Complete response is not valid JSON; preserve it without resubmitting.');}
     const contract=z.object({data:z.array(z.object({url:z.string().optional(),b64_json:z.string().optional(),revised_prompt:z.string().optional()}).passthrough()).length(1),model:z.string().max(200).optional(),usage:z.unknown().optional()}).passthrough().safeParse(value);
     if(!contract.success)fail('IMAGE_RESPONSE_CONTRACT','Expected one identifiable image result; preserve the full response.');

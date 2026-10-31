@@ -73,6 +73,16 @@ it.each(['{"data":[]}','not json','{"data":[{"b64_json":"invalid"}]}'])('preserv
   const f=await imageFixture(),p=await planFor(f.root);let posts=0;const client={async create(){posts++;return new Response(body);}};
   expect((await runImages(f.root,p.planId,true,{client})).summary.unknown).toBe(1);await runImages(f.root,p.planId,false,{client});expect(posts).toBe(1);
 });
+it.each(['upstream_text_reply','untrusted-provider-code'])('retains HTTP 400 evidence and only exposes known provider codes (%s)',async(code)=>{
+  const f=await imageFixture(),p=await planFor(f.root);let posts=0;
+  const raw=JSON.stringify({error:{code,message:'Private prompt, Bearer offline-secret, https://cdn.example.com/private?sig=secret'}});
+  const client={async create(){posts++;return new Response(raw,{status:400});}};
+  const result=await runImages(f.root,p.planId,true,{client});expect(result.summary.unknown).toBe(1);expect(result.summary.registered).toBe(0);
+  const job=(await listImageJobs(f.root))[0]!;expect(job.status).toBe('submit_unknown');expect(job.error?.message.includes('upstream_text_reply')).toBe(code==='upstream_text_reply');
+  for(const privateText of ['Private prompt','offline-secret','cdn.example','untrusted-provider-code'])expect(job.error?.message).not.toContain(privateText);
+  expect(await readFile(join(f.root,`.metasocli/image-receipts/${job.operationId}/response.bin`),'utf8')).toBe(raw);
+  await runImages(f.root,p.planId,false,{client});expect(posts).toBe(1);expect((await loadStory(f.root)).assets[0]!.media).toBeNull();
+});
 it('URL receipt survives expired download; recovered bytes register without sending API credentials or POST',async()=>{
   const f=await imageFixture(),p=await planFor(f.root);let posts=0;
   const result=await runImages(f.root,p.planId,true,{client:{async create(){posts++;return new Response(JSON.stringify({data:[{url:'https://cdn.example.com/out.png?sig=secret'}]}));}},fetcher:async(_url,init)=>{expect(init?.headers).toBeUndefined();return new Response('',{status:403});}});

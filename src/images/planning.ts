@@ -11,14 +11,14 @@ import { canonicalSha256, sha256Hex } from '../storage/canonical.js';
 import { withProjectWrite } from '../storage/locking.js';
 import { inspectImage } from '../assets/image.js';
 import { ImagePlan, ImageProfile, type ImagePlanRecord, type ImagePlanItem, type Profile, type EffectiveInput, type ImageJobRecord } from './contracts.js';
-import { imagePath, listImageJobs, readImagePlan } from './store.js';
+import { imagePath, listImageJobs, readImagePlan, readImageRun } from './store.js';
 
 export const IMAGE_PROFILE_FILE=fileURLToPath(new URL('../../.local/image-provider.json',import.meta.url));
 export async function loadImageProfile(file?:string):Promise<Profile> {
   const path=await safePath(file??IMAGE_PROFILE_FILE);
   return parse(ImageProfile,await exists(path)?await readJson(path):file?fail('IMAGE_PROFILE_MISSING','Explicit image profile is missing.'):{});
 }
-export interface ImageScope {episodes?:string[];selection?:unknown;assets?:string[];allEpisodes?:boolean;profile?:unknown;submissionMode?:string}
+export interface ImageScope {episodes?:string[];selection?:unknown;assets?:string[];allEpisodes?:boolean;profile?:unknown;submissionMode?:string;restartOf?:string}
 const binding=(episodeId:string,s:Story['episodes'][number]['segments'][number])=>({episodeId,segmentId:s.id,hash:canonicalSha256(s)});
 export async function createImagePlan(root:string,input:ImageScope) {
   if([input.episodes!==undefined,input.selection!==undefined,input.assets!==undefined,input.allEpisodes===true].filter(Boolean).length!==1) fail('IMAGE_SCOPE','Select exactly one ordered image scope.');
@@ -26,6 +26,13 @@ export async function createImagePlan(root:string,input:ImageScope) {
   const profile=parse(ImageProfile,input.profile??await loadImageProfile());
   return withProjectWrite(root,async()=>{
     const story=await loadStory(root),jobs=await listImageJobs(root);
+    const restart=input.restartOf?await readImagePlan(root,input.restartOf):undefined;
+    const restartAncestors=new Set<string>();
+    for(let ancestor=restart;ancestor;ancestor=ancestor.restartOf?await readImagePlan(root,ancestor.restartOf):undefined){
+      if(restartAncestors.has(ancestor.planId)||ancestor.projectId!==story.projectId)fail('IMAGE_RESTART_INVALID','Image restart ancestry is cyclic or crosses project identity.');
+      restartAncestors.add(ancestor.planId);
+    }
+    if(restart&&(restart.projectId!==story.projectId||!await readImageRun(root,restart)))fail('IMAGE_RESTART_INVALID','Restart requires an existing authorized image plan in this story.');
     let scope:ImagePlanRecord['scope']=[];const seeds:string[]=[];
     if(input.assets) {
       const ids=parse(z.array(Id).min(1).max(2000),input.assets);if(new Set(ids).size!==ids.length)fail('IMAGE_SCOPE','Repeated asset IDs.');seeds.push(...ids);
@@ -53,9 +60,13 @@ export async function createImagePlan(root:string,input:ImageScope) {
       const promptHash=sha256Hex(recipe.prompt),promptPath=`.metasocli/image-inputs/prompts/${promptHash}.txt`;
       await atomicWrite(await projectPath(root,promptPath),recipe.prompt);
       let action:ImagePlanItem['action']='generate',reason:string|undefined,operationId:string|undefined;
-      const previous=jobs.filter(j=>j.assetId===id).at(-1);
+      const previous=jobs.filter(j=>j.assetId===id).at(-1);let retryOf:string|undefined;
       if(asset.media){try{if(sha256Hex(await readStable(await projectPath(root,asset.media.path),profile.maxImageBytes))!==asset.media.sha256)throw new Error();action='reuse';}catch{action='blocked';reason='Existing media changed or missing; restore its original result first.';}}
       if(previous && (!['registered','reused','superseded'].includes(previous.status)||(action==='blocked'&&previous.result))){action='recover';operationId=previous.operationId;reason=undefined;}
+      if(restart&&previous&&restartAncestors.has(previous.planId)&&!asset.media&&['prepared','waiting_dependency','blocked','rejected','failed','submit_unknown','superseded'].includes(previous.status)) {
+        if(['blocked','superseded'].includes(previous.status)&&(previous.input||previous.requestStartedAt||previous.result))fail('IMAGE_RESTART_RECOVERY_REQUIRED','Recover an existing submitted result before replacing its plan.');
+        action='generate';operationId=undefined;reason=undefined;retryOf=previous.operationId;
+      }
       const size=profile.sizes[id]??(recipe.kind==='first_frame'?profile.firstFrameSize:profile.boardSize),[w,h]=size.split('x').map(Number) as [number,number];
       if(action==='generate') {
         const pixels=[...recipe.prompt.matchAll(/\b(\d{3,4})\s*[x×]\s*(\d{3,4})\b/gu)];
@@ -65,9 +76,9 @@ export async function createImagePlan(root:string,input:ImageScope) {
       }
       const dependencySources=recipe.dependencies.map(assetId=>{const upstream=items.find(i=>i.assetId===assetId);if(!upstream)fail('IMAGE_DEPENDENCY_KIND','Image dependencies must be images, not narration.');return {assetId,hash:upstream.action==='reuse'?upstream.targetHash:null,producer:upstream.action==='reuse'?null:upstream.operationId?jobs.find(j=>j.operationId===upstream.operationId)!.fingerprint:upstream.fingerprint};});
       const identity={assetId:id,kind:recipe.kind,recipeHash:asset.recipeHash,promptHash,promptPath,dependencies:recipe.dependencies,dependencySources,targetHash:asset.media?.sha256??null,size,requiredBy:required.get(id)??[]};
-      items.push({...identity,fingerprint:canonicalSha256({identity,profile}),action,...(reason?{reason}:{}),...(operationId?{operationId}:{})});
+      items.push({...identity,fingerprint:canonicalSha256({identity,profile}),action,...(reason?{reason}:{}),...(operationId?{operationId}:{}),...(retryOf?{retryOf}:{})});
     }
-    const base={schemaVersion:1 as const,planId:randomUUID(),projectId:story.projectId,createdAt:new Date().toISOString(),revisionAtCreation:story.revision,profile,scope,items};
+    const base={schemaVersion:1 as const,planId:randomUUID(),projectId:story.projectId,createdAt:new Date().toISOString(),revisionAtCreation:story.revision,...(restart?{restartOf:restart.planId}:{}),profile,scope,items};
     const plan=parse(ImagePlan,{...base,planHash:canonicalSha256(base)});await writeJson(await imagePath(root,'image-plans',plan.planId),plan);
     return {plan,summary:imagePlanSummary(plan)};
   });

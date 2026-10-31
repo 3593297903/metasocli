@@ -19,7 +19,7 @@ import { acquireVideoStage } from '../images/phase.js';
 const Options = z.object({ maxPolls: z.number().int().min(1).max(720).default(60), pollIntervalMs: z.number().int().min(0).max(60000).default(5000),
   schedulerWaitMs: z.number().int().min(0).max(300000).default(30000) }).strict();
 type Event = { kind: 'create'|'query'|'download'; root?: string; order?: number; job?: Job; error?: ReturnType<typeof publicError> };
-export interface BatchDependencies extends JobDependencies { retryOperationId?: string; now?: () => number; onStart?: (summary: Awaited<ReturnType<typeof batchStatus>>['summary']) => void | Promise<void> }
+export interface BatchDependencies extends JobDependencies { retryOperationId?: string; acceptExistingUnknown?: string[]; now?: () => number; onStart?: (summary: Awaited<ReturnType<typeof batchStatus>>['summary']) => void | Promise<void> }
 export async function authorizeBatchRetry(root: string, id: string, old: string, confirmed: boolean, accepted: boolean, deps: Pick<BatchDependencies, 'runtimeRoot'|'checkpoint'> = {}) {
   const plan = await loadBatch(root, id), jobs = await listJobs(root), original = jobs.find(j => j.operationId === old);
   const item = plan.items.find(i => i.episodeId === original?.episodeId && i.segmentId === original.segmentId && i.inputHash === original.inputHash && i.requestHash === original.requestHash);
@@ -53,6 +53,20 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
         items: plan.items.map(i => ({ order: i.order, retryHistory: [] })), rateLimit: { spentWaitMs: 0, notBefore: 0 }, trace: [] };
     }
     const state: VideoBatchRun = run;
+    if (deps.acceptExistingUnknown) {
+      if(!authorize)fail('GENERATION_NOT_AUTHORIZED','Adding an existing-unknown acknowledgement requires batch run --confirm.');
+      const ids=parse(z.array(z.uuid()).min(1).max(4),deps.acceptExistingUnknown);
+      if(new Set(ids).size!==ids.length)fail('UNKNOWN_ACK_CONFLICT','Duplicate unknown identities.');
+      const ledger=await reconcileRuntime(root,runtime),accepted=state.authorization.acceptedUnknown??[];
+      for(const id of ids){const slot=ledger.slots.find(s=>s.operationId===id);
+        if(!slot||slot.status!=='submit_unknown'||slot.taskId)fail('UNKNOWN_ACK_CONFLICT','Only an exact currently unresolved no-taskId request may be acknowledged.');
+        const record={root:slot.root,projectId:slot.projectId,operationId:slot.operationId,requestHash:slot.requestHash,inputHash:slot.inputHash};
+        const previous=accepted.find(a=>a.operationId===id);
+        if(previous&&JSON.stringify(previous)!==JSON.stringify(record))fail('UNKNOWN_ACK_CONFLICT','Acknowledged request identity changed.');
+        if(!previous)accepted.push(record);
+      }
+      state.authorization.acceptedUnknown=accepted;
+    }
     if (authorize) delete state.authorization.retryOnly;
     if (state.authorization.retryOnly && deps.retryOperationId) {
       const retry = (await listVideoRetries(root, runtime)).find(a => a.oldOperationId === deps.retryOperationId);
@@ -70,7 +84,7 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
     const createdThisRun = new Set<string>();
     const events: Event[] = [];
     let halt = imageStagePaused, dispatchPaused = false;
-    const taskDeps = { ...deps, runtimeRoot: runtime, schedulerToken: scheduler.token, capacity: plan.concurrency, client: {
+    const taskDeps = { ...deps, runtimeRoot: runtime, schedulerToken: scheduler.token, capacity: plan.concurrency, dispatchBatchId:id, client: {
       prepare: deps.client.prepare?.bind(deps.client),
       create: deps.client.create.bind(deps.client),
       async query(taskId: string) {
@@ -144,7 +158,7 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
         trace('rate-backoff', order, job, String(wait));
       }
       let ledger = await reconcileRuntime(root, runtime);
-      let blocked = (await blockingSlots(root, ledger, runtime)).length > 0 || halt || dispatchPaused;
+      let blocked = (await blockingSlots(root, ledger, runtime,{batchId:id})).length > 0 || halt || dispatchPaused;
       // Prioritize replenishment before starting or waiting for any download.
       if (!blocked && now() >= state.rateLimit.notBefore) {
         const prioritized = [...plan.items].sort((a, b) => Number(retryAuthorizations.some(r => r.newOperationId === selected[b.order]?.operationId && selected[b.order]?.status === 'prepared'))
@@ -183,7 +197,7 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
           // Wait only until this POST enters its transport (or local preparation fails), never for its response.
           await started;
           ledger = await reconcileRuntime(root, runtime);
-          if (dispatchPaused || halt || (await blockingSlots(root, ledger, runtime)).length || events.length) break;
+          if (dispatchPaused || halt || (await blockingSlots(root, ledger, runtime,{batchId:id})).length || events.length) break;
         }
       }
       // Query all registered accepted tasks, including older tasks occupying shared slots.

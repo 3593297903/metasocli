@@ -5,12 +5,13 @@ import { Hash, parse } from '../contracts/story.js';
 import { JobSchema, type Job } from '../contracts/job.js';
 import { loadStory } from '../core/project.js';
 import { fail } from '../core/errors.js';
-import { exists, pathIdentity, safePath, samePath } from '../storage/paths.js';
+import { exists, pathIdentity, safePath, samePath, projectPath } from '../storage/paths.js';
 import { readJson, writeJson } from '../storage/io.js';
 import { canonicalSha256 } from '../storage/canonical.js';
 import { liveLease, serialized, waitLease } from '../storage/locking.js';
 import { listJobs } from './store.js';
 import { listVideoRetries } from './video-retry.js';
+import { BatchPlan, BatchRun } from '../contracts/batch.js';
 
 const Slot = z.object({ root: z.string(), projectId: z.uuid(), operationId: z.uuid(), requestHash: Hash, inputHash: Hash,
   taskId: z.string().optional(), status: z.enum([...JobSchema.shape.status.options, 'reserved']), updatedAt: z.iso.datetime() }).strict();
@@ -21,10 +22,25 @@ export type SlotRecord = z.infer<typeof Slot>;
 export const terminal = (status: string) => ['generated', 'downloaded', 'failed', 'cancelled'].includes(status);
 export const occupied = (ledger: LedgerState) => ledger.slots.filter(s => !terminal(s.status));
 export const unsafeSlots = (ledger: LedgerState) => ledger.slots.filter(s => ['submit_unknown', 'query_unknown'].includes(s.status));
-/** Only this project's exact durable acknowledgements lift the dispatch halt; never the slot. */
-export async function blockingSlots(root: string, ledger: LedgerState, runtime?: string) {
+export interface BatchDispatchBinding {batchId:string;planId?:string;segmentId?:string;requestHash?:string;inputHash?:string}
+/** Explicit batch acknowledgements are bound to the immutable authorized scope. They never release occupied slots. */
+async function acceptedByBatch(root:string,binding:BatchDispatchBinding) {
+  const id=parse(z.uuid(),binding.batchId),folder='.metasocli/batches/'+id+'/';
+  const plan=parse(BatchPlan,await readJson(await projectPath(root,folder+'plan.json'))),run=parse(BatchRun,await readJson(await projectPath(root,folder+'run.json')));
+  const {batchHash,...planBase}=plan,{hash,...runBase}=run;
+  if(canonicalSha256(planBase)!==batchHash||canonicalSha256(runBase)!==hash||run.batchId!==id||plan.batchId!==id||run.batchHash!==batchHash||run.authorization.batchHash!==batchHash||plan.projectId!==(await loadStory(root)).projectId)fail('BATCH_ACK_CONFLICT','Batch acknowledgement identity or hash changed.');
+  if(binding.planId!==undefined&&!plan.items.some(i=>i.planId===binding.planId&&i.segmentId===binding.segmentId&&i.requestHash===binding.requestHash&&i.inputHash===binding.inputHash))fail('BATCH_ACK_SCOPE','Acknowledgement does not cover this immutable request.');
+  return run.authorization.acceptedUnknown??[];
+}
+/** Default cross-project unknowns still halt dispatch; an explicit current-batch grant may acknowledge exact identities. */
+export async function blockingSlots(root: string, ledger: LedgerState, runtime?: string,binding?:BatchDispatchBinding) {
   const acknowledged = new Set((await listVideoRetries(root, runtimeDirectory(runtime))).map(a => a.oldOperationId));
-  return unsafeSlots(ledger).filter(s => !samePath(s.root, root) || s.status !== 'submit_unknown' || !!s.taskId || !acknowledged.has(s.operationId));
+  const accepted=binding?await acceptedByBatch(root,binding):[];
+  return unsafeSlots(ledger).filter(s=>{
+    if(s.status!=='submit_unknown'||s.taskId)return true;
+    if(samePath(s.root,root)&&acknowledged.has(s.operationId))return false;
+    return !accepted.some(a=>samePath(a.root,s.root)&&a.projectId===s.projectId&&a.operationId===s.operationId&&a.requestHash===s.requestHash&&a.inputHash===s.inputHash);
+  });
 }
 export function runtimeDirectory(injected?: string) { return resolve(injected ?? process.env.METASO_RUNTIME_DIR ?? join(homedir(), '.metasocli-runtime')); }
 async function readLedger(runtime: string): Promise<LedgerState> {

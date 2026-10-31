@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { Hash, Id, RelativePath } from '../contracts/story.js';
 
 export const IMAGE_ORIGIN = 'https://api.yiciyuang.com';
+export const IMAGE_GENERATION_TIMEOUT_MS = 300000;
 export const Size = z.enum(['1024x1024', '1536x1024', '1024x1536', '1920x1088', '1088x1920', '2048x2048', '2560x1707', '1707x2560', '4096x4096']);
 export const ImageProfile = z.object({
   backend: z.literal('api').default('api'), provider: z.literal('yiciyuang').default('yiciyuang'),
@@ -12,7 +13,8 @@ export const ImageProfile = z.object({
   providerLimits: z.object({ concurrent: z.number().int().positive().optional(), rpm: z.number().int().positive().optional(),
     batch: z.number().int().positive().optional(), source: z.string().min(1).max(2000), checkedAt: z.iso.datetime() }).strict().optional(),
   downloadConcurrency: z.number().int().min(1).max(16).default(2), decodeConcurrency: z.number().int().min(1).max(8).default(2),
-  registrationConcurrency: z.literal(1).default(1), generationTimeoutMs: z.number().int().min(1000).max(3600000).default(600000),
+  // Accept longer legacy plan values without changing their hashes; the client caps the effective deadline.
+  registrationConcurrency: z.literal(1).default(1), generationTimeoutMs: z.number().int().min(1000).max(3600000).default(IMAGE_GENERATION_TIMEOUT_MS),
   automaticPostRetries: z.literal(0).default(0), quotaGroup: Id.default('yiciyuang-default'),
   maxResponseBytes: z.number().int().min(1024).max(45*1024*1024).default(45*1024*1024),
   maxImageBytes: z.number().int().min(1024).max(30*1024*1024).default(30*1024*1024),
@@ -24,10 +26,10 @@ export const ImageItem = z.object({
   assetId: Id, kind: z.enum(['character','scene','prop','first_frame']), recipeHash: Hash, promptHash: Hash,
   promptPath: RelativePath, dependencies: z.array(Id), dependencySources: z.array(z.object({ assetId: Id, hash: Hash.nullable(), producer: Hash.nullable() }).strict()),
   targetHash: Hash.nullable(), size: Size, fingerprint: Hash, requiredBy: z.array(Binding),
-  action: z.enum(['generate','reuse','recover','blocked']), operationId: z.uuid().optional(), reason: z.string().optional(),
+  action: z.enum(['generate','reuse','recover','blocked']), operationId: z.uuid().optional(), retryOf: z.uuid().optional(), reason: z.string().optional(),
 }).strict();
 export const ImagePlan = z.object({ schemaVersion: z.literal(1), planId: z.uuid(), projectId: z.uuid(), planHash: Hash,
-  createdAt: z.iso.datetime(), revisionAtCreation: z.number().int(), profile: ImageProfile, scope: z.array(Binding), items: z.array(ImageItem).max(2000) }).strict();
+  createdAt: z.iso.datetime(), revisionAtCreation: z.number().int(), restartOf:z.uuid().optional(), profile: ImageProfile, scope: z.array(Binding), items: z.array(ImageItem).max(2000) }).strict();
 export type ImagePlanRecord = z.infer<typeof ImagePlan>;
 export type ImagePlanItem = z.infer<typeof ImageItem>;
 export const ImageInput = z.object({ provider: z.literal('yiciyuang'), origin: z.literal(IMAGE_ORIGIN),
@@ -52,10 +54,10 @@ export const ImageReceipt = z.object({ operationId:z.uuid(), requestHash:Hash, b
   url:z.string().optional(), result:ImageJob.shape.result.optional(), requestedModel:z.literal('gpt-image-2.5'), reportedModel:z.string().optional(),
   revisedPromptPath:RelativePath.optional(), usage:z.unknown().optional(), recoveredManually:z.boolean().optional() }).strict();
 export const ImageRun = z.object({ schemaVersion:z.literal(1), planId:z.uuid(), planHash:Hash, hash:Hash,
-  authorization:z.object({planHash:Hash,provider:z.literal('yiciyuang'),quotaGroup:Id,maxRequests:z.number().int(),authorizedAt:z.iso.datetime()}).strict(),
+  authorization:z.object({planHash:Hash,provider:z.literal('yiciyuang'),quotaGroup:Id,maxRequests:z.number().int(),authorizedAt:z.iso.datetime(),acceptedUnknown:z.array(z.object({operationId:z.uuid(),requestHash:Hash}).strict()).optional(),acceptedExistingUnknown:z.array(z.object({root:z.string(),projectId:z.uuid(),planId:z.uuid(),operationId:z.uuid(),assetId:Id,fingerprint:Hash,requestHash:Hash}).strict()).max(1000).optional()}).strict(),
   items:z.array(z.object({assetId:Id,operationId:z.uuid().optional(),retryOf:z.uuid().optional()}).strict()),
   unlocks:z.array(z.object({at:z.iso.datetime(),dependency:Id,assets:z.array(Id)}).strict()),
-  status:z.enum(['running','complete','needs_attention']),updatedAt:z.iso.datetime(),
+  status:z.enum(['running','complete','needs_attention']),updatedAt:z.iso.datetime(),replacementPlanId:z.uuid().optional(),
 }).strict();
 export type ImageRunRecord = z.infer<typeof ImageRun>;
 export const resolvedImage = (status:string) => ['registered','reused','rejected','failed','superseded','blocked'].includes(status);

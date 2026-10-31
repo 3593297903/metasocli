@@ -13,7 +13,7 @@
   "downloadConcurrency": 2,
   "decodeConcurrency": 2,
   "registrationConcurrency": 1,
-  "generationTimeoutMs": 600000,
+  "generationTimeoutMs": 300000,
   "automaticPostRetries": 0,
   "quotaGroup": "yiciyuang-default",
   "maxResponseBytes": 47185920,

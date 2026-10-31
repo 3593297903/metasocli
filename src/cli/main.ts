@@ -36,8 +36,9 @@ All story commands require --root <dedicated-story-directory>.
 auth status
 images auth-status                 Local image credential status only; no remote authentication probe.
 images plan --root <path> (--episodes <ordered,ids>|--selection <json>|--assets <ordered,ids>|--all-episodes)
-            [--profile <json>] --submission-mode all-ready
-images run --root <path> --plan <imagePlanId> --confirm
+            [--profile <json>] --submission-mode all-ready [--restart-of <previousImagePlanId>]
+images run --root <path> --plan <imagePlanId> --confirm [--accept-unknown-result]
+           [--accept-existing-unknown <operationId,...>]  This plan only; retains older project records.
 images status --root <path> [--plan <imagePlanId>]
 images resume --root <path> --plan <imagePlanId>
 images recover --root <path> --operation <id>
@@ -58,6 +59,7 @@ generate   --root <path> --plan <id> --confirm [--segment <id>] [--submit-only] 
            [--accept-unknown-result]  One new attempt for a no-taskId unknown; requires --retry-of and --segment.
 batch plan --root <path> (--episodes <ordered,ids>|--selection <json>|--all-episodes) [--concurrency <1..4>]
 batch run  --root <path> --batch <id> --confirm [--max-polls <1..720>] [--poll-ms <0..60000>]
+           [--accept-existing-unknown <operationId,...>]  Exact old identities; retains their occupied slots.
 batch resume --root <path> --batch <id> [--max-polls <1..720>] [--poll-ms <0..60000>]
 batch retry --root <path> --batch <id> --operation <local-operation-id> --confirm --accept-unknown-result
             [--max-polls <1..720>] [--poll-ms <0..60000>]
@@ -113,13 +115,13 @@ const flags: Record<string, { strings?: string[]; booleans?: string[] }> = {
   resume: { strings: ['operation', 'max-polls', 'poll-ms'] }, download: { strings: ['operation'], booleans: ['redownload-missing'] },
   'attach-task': { strings: ['operation', 'task'], booleans: ['confirm-task-link'] }, doctor: {},
   'batch plan': { strings: ['episodes', 'selection', 'concurrency'], booleans: ['all-episodes'] },
-  'batch run': { strings: ['batch', 'max-polls', 'poll-ms', 'scheduler-wait-ms'], booleans: ['confirm'] },
-  'batch resume': { strings: ['batch', 'max-polls', 'poll-ms', 'scheduler-wait-ms'] },
+  'batch run': { strings: ['batch', 'max-polls', 'poll-ms', 'scheduler-wait-ms', 'accept-existing-unknown'], booleans: ['confirm'] },
+  'batch resume': { strings: ['batch', 'max-polls', 'poll-ms', 'scheduler-wait-ms', 'accept-existing-unknown'] },
   'batch retry': { strings: ['batch', 'operation', 'max-polls', 'poll-ms', 'scheduler-wait-ms'], booleans: ['confirm', 'accept-unknown-result'] },
   'batch status': { strings: ['batch'] }, 'batch register': {},
   'images auth-status': {},
-  'images plan': { strings:['episodes','selection','assets','profile','submission-mode'],booleans:['all-episodes'] },
-  'images run': { strings:['plan'],booleans:['confirm'] }, 'images resume': { strings:['plan'] },
+  'images plan': { strings:['episodes','selection','assets','profile','submission-mode','restart-of'],booleans:['all-episodes'] },
+  'images run': { strings:['plan','accept-existing-unknown'],booleans:['confirm','accept-unknown-result'] }, 'images resume': { strings:['plan'] },
   'images status': { strings:['plan'] }, 'images recover': { strings:['operation'] },
   'images attach-result': { strings:['operation','file','expected-sha256'],booleans:['confirm-result-link'] },
   'images resolve': { strings:['operation','outcome','evidence'],booleans:['confirm-resolution'] },
@@ -157,13 +159,14 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
       let data:unknown,exitCode=0;
       if(command==='images plan')data=await createImagePlan(root,{...(v.episodes?{episodes:required(v,'episodes').split(',').map(s=>s.trim())}:{}),
         ...(v.assets?{assets:required(v,'assets').split(',').map(s=>s.trim())}:{}),...(v.selection?{selection:await readJson(resolve(required(v,'selection')))}:{}),
-        allEpisodes:v['all-episodes']===true,profile:await loadImageProfile(v.profile as string|undefined),submissionMode:required(v,'submission-mode')});
+        allEpisodes:v['all-episodes']===true,profile:await loadImageProfile(v.profile as string|undefined),submissionMode:required(v,'submission-mode'),...(v['restart-of']?{restartOf:required(v,'restart-of')}:{})});
       else if(command==='images status')data=await imageStatus(root,v.plan as string|undefined);
       else if(command==='images run'||command==='images resume'||command==='images retry') {
         if(command!=='images resume'&&v.confirm!==true)fail('IMAGE_NOT_AUTHORIZED','Authorize this image provider and frozen scope/new attempt before --confirm.');
+        if(v['accept-existing-unknown']!==undefined)imageDeps.acceptExistingUnknown=required(v,'accept-existing-unknown').split(',').map(s=>s.trim());
         const retryOf=command==='images retry'?required(v,'operation'):undefined;
         const id=retryOf?(await readImageJob(root,retryOf)).planId:required(v,'plan');
-        const result=await runImages(root,id,command!=='images resume',imageDeps,retryOf);data=result;exitCode=result.run?.status==='complete'?0:2;
+        const result=await runImages(root,id,command!=='images resume',imageDeps,retryOf,v['accept-unknown-result']===true);data=result;exitCode=result.run?.status==='complete'?0:2;
       }else if(command==='images recover'){const job=await recoverImage(root,required(v,'operation'),imageDeps);data=job;exitCode=job.status==='registered'?0:2;}
       else if(command==='images attach-result')data=await attachImageResult(root,required(v,'operation'),resolve(required(v,'file')),required(v,'expected-sha256'),v['confirm-result-link']===true,imageDeps);
       else if(command==='images resolve')data=await resolveImage(root,required(v,'operation'),required(v,'outcome'),await readJson(resolve(required(v,'evidence'))),v['confirm-resolution']===true,imageDeps);
@@ -193,6 +196,7 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
       return { exitCode: 0, data: { registeredProjects: ledger.projects, occupied: occupied(ledger), limit: 4, liveCheckPerformed: false } };
     }
     if (command === 'batch run' || command === 'batch resume' || command === 'batch retry') {
+      if(v['accept-existing-unknown']!==undefined&&command!=='batch run')fail('GENERATION_NOT_AUTHORIZED','Only batch run --confirm may add a scoped unknown acknowledgement.');
       if (command === 'batch run' && v.confirm !== true) fail('GENERATION_NOT_AUTHORIZED', 'batch run needs authorization for the frozen scope and inline IR.');
       const id = required(v, 'batch'), plan = await loadBatch(root, id), polling = pollOptions(v), wait = number(v, 'scheduler-wait-ms');
       if (wait !== undefined && wait > 300000) fail('CLI_ARGUMENT', '--scheduler-wait-ms must be 0–300000.');
@@ -200,7 +204,7 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
       const dependencies = await deps();
       const old = command === 'batch retry' ? required(v, 'operation') : undefined;
       if (old) await authorizeBatchRetry(root, id, old, v.confirm === true, v['accept-unknown-result'] === true, dependencies);
-      const result = await runBatch(root, id, command === 'batch run', { ...dependencies, ...(old ? { retryOperationId: old } : {}), ...(!injected ? { onStart: (summary: unknown) => { process.stderr.write(JSON.stringify({ event: 'batch-start', summary }) + '\n'); } } : {}) }, { ...polling, ...(wait === undefined ? {} : { schedulerWaitMs: wait }) });
+      const result = await runBatch(root, id, command === 'batch run', { ...dependencies, ...(v['accept-existing-unknown']?{acceptExistingUnknown:required(v,'accept-existing-unknown').split(',').map(s=>s.trim())}:{}), ...(old ? { retryOperationId: old } : {}), ...(!injected ? { onStart: (summary: unknown) => { process.stderr.write(JSON.stringify({ event: 'batch-start', summary }) + '\n'); } } : {}) }, { ...polling, ...(wait === undefined ? {} : { schedulerWaitMs: wait }) });
       return { exitCode: result.run?.status === 'complete' ? 0 : 2, data: result };
     }
     if (command === 'import') {

@@ -53,3 +53,7 @@ API 图片授权必须覆盖该供应商及冻结范围；仅调用本入口不�
 若原任务 A 找回 ID 后明确 failed/cancelled，先前未发送的 B 会保留为 cancelled / RETRY_SUPERSEDED。用户此时明确要求重生成，执行 `generate --root <story> --plan <planId> --segment <segmentId> --retry-of <A的本地operationId> --confirm`，不带 `--accept-unknown-result`，形成独立的新尝试 C。相同失败重试命令和中断恢复复用 C；重复带风险确认参数的旧未知重试命令仍绑定 A→B，不新增授权。保留 A、B、C 和原授权；原已授权批次可通过 batch resume 接回 C，不重新启用 B。C 再失败或未知须针对 C 明确授权下一次，不能反复使用 A 的命令生成。
 
 详见 [正式重试与恢复](../../docs/VIDEO_UNKNOWN_RETRY.md)。只使用当前已验证安装的正式 CLI；另一设备须部署修复构建与 Skill 正文后才有此行为。图片与独立 IR 的未知恢复规则不变，不能把本功能称为网络或供应商故障已修复。
+
+## 本次批次专属确认（跨项目旧未知）
+
+默认仍保护其他项目未知。只有当前用户明确允许保留指定旧未知及其占位、让本次批次使用剩余名额时，使用[当前批次专属确认](../../docs/VIDEO_UNKNOWN_RETRY.md#另一项目旧未知本次批次专属确认2026-10-19)的batch run --confirm --accept-existing-unknown入口。确认严格绑定当前批次与原请求身份，保留原占位，四个总名额不变；不得自动套用旧项目的确认，不能清账本或更换runtime。本轮新未知仍停止；原batch resume沿用已保存确认，不能扩大范围或重发旧任务。

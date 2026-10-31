@@ -16,7 +16,7 @@ import { writeJson } from '../storage/io.js';
 
 export interface JobDependencies {
   client: VideoClient; fetcher?: Fetch; persistence?: Persistence; sleep?: (ms: number) => Promise<void>;
-  runtimeRoot?: string; schedulerToken?: string; capacity?: number;
+  runtimeRoot?: string; schedulerToken?: string; capacity?: number; dispatchBatchId?: string;
   checkpoint?: (event: string, job: Job) => Promise<void>;
 }
 function choose(jobs: Job[], episodeId: string, segmentId: string, inputHash: string, retryOf?: string) {
@@ -105,7 +105,7 @@ export async function submit(root: string, planId: string, segmentId: string, au
       }
       const acknowledgements = await listVideoRetries(root, runtime);
       await checkSubmissionConflicts(root, plan.episodeId, segmentId, undefined, new Set(acknowledgements.map(a => a.oldOperationId)));
-      if ((await blockingSlots(root, ledger, runtime)).length) fail('SUBMIT_UNKNOWN', 'Shared capacity contains an unacknowledged unknown task; recover it before creating.');
+      if ((await blockingSlots(root, ledger, runtime,deps.dispatchBatchId?{batchId:deps.dispatchBatchId,planId,segmentId,requestHash:segment.requestHash,inputHash:segment.inputHash}:undefined)).length) fail('SUBMIT_UNKNOWN', 'Shared capacity contains an unacknowledged unknown task; recover it before creating.');
       const previous = selected.previous;
       const held = previous?.status === 'prepared' ? ledger.slots.find(s => s.operationId === previous.operationId) : undefined;
       const capacity = deps.capacity ?? 4;

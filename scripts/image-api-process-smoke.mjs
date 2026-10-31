@@ -29,7 +29,7 @@ if(process.argv[2]==='worker'){
     const env={...process.env,PATH:dirname(process.execPath),USERPROFILE:join(base,'home'),HOME:join(base,'home'),TMP:temp,TEMP:temp};delete env.METASO_API_KEY;delete env.METASOCLI_IMAGE_API_KEY;delete env.METASO_RUNTIME_DIR;
     const child=spawn(process.execPath,[fileURLToPath(import.meta.url),'worker',root,id,point,runtime],{cwd:base,env,windowsHide:true,stdio:['ignore','pipe','pipe','ipc']});
     let stderr='';child.stderr.on('data',d=>{stderr+=d;});const exit=new Promise(r=>child.once('exit',r));
-    try{await new Promise((ok,bad)=>{const timeout=setTimeout(()=>bad(Error('Checkpoint timeout '+point+' '+stderr)),30000);child.once('message',m=>{clearTimeout(timeout);assert.equal(m.checkpoint,point);ok();});child.once('error',e=>{clearTimeout(timeout);bad(e);});child.once('exit',()=>{clearTimeout(timeout);bad(Error('Early exit '+stderr));});});}
+    try{await new Promise((ok,bad)=>{const timeout=setTimeout(()=>bad(Error('Checkpoint timeout '+point+' '+stderr)),30000);child.once('message',m=>{clearTimeout(timeout);assert.equal(m.checkpoint,point);ok();});child.once('error',e=>{clearTimeout(timeout);bad(e);});child.once('exit',(code,signal)=>{clearTimeout(timeout);bad(Error(`Early exit at ${point} (code ${code}, signal ${signal}): ${stderr}`));});});}
     catch(e){child.kill('SIGKILL');await exit;throw e;}
     return {child,exit};
   }

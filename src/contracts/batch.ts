@@ -10,8 +10,9 @@ export const BatchPlan = z.object({ schemaVersion: z.literal(1), batchId: z.uuid
   retryPolicy: z.object({ max429RetriesPerItem: z.literal(2), totalWaitBudgetMs: z.literal(60000) }).strict(),
   items: z.array(BatchItem).min(1),
 }).strict();
+export const ExistingUnknownAcknowledgement = z.object({root:z.string().min(1),projectId:z.uuid(),operationId:z.uuid(),requestHash:Hash,inputHash:Hash}).strict();
 export const BatchRun = z.object({ schemaVersion: z.literal(1), batchId: z.uuid(), batchHash: Hash, hash: Hash,
-  authorization: z.object({ batchHash: Hash, authorizedAt: z.iso.datetime(), retryOnly: z.array(z.uuid()).min(1).optional() }).strict(),
+  authorization: z.object({ batchHash: Hash, authorizedAt: z.iso.datetime(), retryOnly: z.array(z.uuid()).min(1).optional(), acceptedUnknown: z.array(ExistingUnknownAcknowledgement).min(1).max(4).optional() }).strict(),
   status: z.enum(['running','paused','needs_attention','partial_failed','complete']), updatedAt: z.iso.datetime(),
   items: z.array(z.object({ order: z.number().int().nonnegative(), operationId: z.uuid().optional(),
     retryOf: z.uuid().optional(), retryHistory: z.array(z.uuid()), error: z.object({ code: z.string(), message: z.string() }).strict().optional(),

@@ -6,6 +6,7 @@ import { sha256Hex } from '../storage/canonical.js';
 import type { Fetch } from '../metaso/transport.js';
 import { IMAGE_ORIGIN, type EffectiveInput, type Profile } from './contracts.js';
 import { streamHash } from './stream.js';
+import { effectiveImageTimeout, imageDispatcher, imageTransportFailure } from './transport.js';
 
 export interface ImageClient { prepare?():Promise<void>;create(root:string,input:EffectiveInput,profile:Profile):Promise<Response> }
 export class YicImageClient implements ImageClient {
@@ -27,7 +28,10 @@ export class YicImageClient implements ImageClient {
       }
       body=form; // Native FormData supplies the boundary; file-backed Blobs avoid N large buffers.
     }
-    try {return await this.fetcher(IMAGE_ORIGIN+input.route,{method:'POST',headers,body,redirect:'error',signal:AbortSignal.timeout(profile.generationTimeoutMs)});}
-    catch {return fail('IMAGE_TRANSPORT_UNKNOWN','Image request did not yield a complete response. Preserve the original operation; do not resend.');}
+    const timeoutMs=effectiveImageTimeout(profile.generationTimeoutMs);
+    const options = {method:'POST',headers,body,redirect:'error' as const,
+      signal:AbortSignal.timeout(timeoutMs),dispatcher:imageDispatcher(timeoutMs)};
+    try {return await this.fetcher(IMAGE_ORIGIN+input.route,options);}
+    catch (error) {return imageTransportFailure(error,timeoutMs);}
   }
 }

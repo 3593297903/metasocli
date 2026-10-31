@@ -78,3 +78,5 @@ node <package-root>/dist/cli/main.js assets list --root <story>
 登记只通过本包 CLI，由它独立复制、验证并更新状态，不直接编辑 `metasocli.yaml` 或伪造 ready。PNG/JPEG/WebP 单图最多 30 MiB，宽高 256–5760、宽高比 0.4–2.5；以实际文件为准，不以提示词中的“4K”认定像素尺寸。工具未提供可验证模型证据时不承诺确切生图型号；`requireExactModel: true` 会在调用前报告无法核实。
 
 大素材可按原有 `assets register --url <public-https-url>` 登记，CLI 下载核验并在提交前复核；不自动上传云存储。图片完成后返回上游继续 H3 计划和旁白音频处理。本技能不调用视频生成，两个成品提示词入口在未获视频生成授权时仍停在本地计划。
+
+当前用户明确要求未知图片再次生成时，使用[一次性图片计划重试](../../docs/IMAGE_API_USAGE.md#用户明确再次生成一次性图片计划重试)：先完成当前设计并import，再images plan --restart-of建立一个后继；images run --confirm --accept-unknown-result保存一次性新尝试授权。旧未知及其占位保留，不伪造失败；同一原计划只能有一个后继，恢复复用稳定的新operationId，新未知仍阻断。默认无此明确授权时继续禁止未知重发，不能自动循环重试。

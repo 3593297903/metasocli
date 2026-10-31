@@ -9,10 +9,10 @@ export async function assertNoImageStage(root:string) {
   const file=await projectPath(root,'.metasocli/image-stage.json');
   if(await exists(file) && parse(Stage,await readJson(file)).state==='active') fail('IMAGE_STAGE_ACTIVE','Finish or recover the image stage before new video plans/submissions. Existing video task IDs can still resume.');
 }
-export async function startImageStage(root:string,record:z.infer<typeof Stage>) {
+export async function startImageStage(root:string,record:z.infer<typeof Stage>,replacePlanId?:string) {
   const file=await projectPath(root,'.metasocli/image-stage.json');
   if(await liveLease(await projectPath(root,'.metasocli/video-stage.lock'))) fail('VIDEO_STAGE_ACTIVE','A video batch owns this story; finish its new submissions before image preparation.');
-  if(await exists(file)) {const old=parse(Stage,await readJson(file));if(old.state==='active'&&old.planId!==record.planId)fail('IMAGE_STAGE_ACTIVE','Recover the existing image plan before starting another in this story.');}
+  if(await exists(file)) {const old=parse(Stage,await readJson(file));if(old.state==='active'&&old.planId!==record.planId&&!(old.planId===replacePlanId&&old.projectId===record.projectId&&old.runtime===record.runtime&&old.quotaGroup===record.quotaGroup))fail('IMAGE_STAGE_ACTIVE','Recover the existing image plan before starting another in this story.');}
   await writeJson(file,parse(Stage,record));
 }
 export async function finishImageStage(root:string,planId:string,complete:boolean) {

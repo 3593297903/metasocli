@@ -45,3 +45,17 @@ node E:\metasocli\dist\cli\main.js generate --root <story> --plan <planId> --seg
 仅查询失败、超时、queued/running 或未知状态不属于供应商明确失败，继续用原 ID 恢复。批次查询和创建并行，回执/批次索引检查点的合法状态可能已是 running；不会为了恢复而降级为 queued。
 
 本轮没有付费调用。另一设备须部署包含此修复的构建和 Skill 正文，原 `e781ccb1a4b0fefb63cf76b2eea1480ee4cbe59d` 不包含本功能；见 [新设备修复版本说明](NEW_DEVICE_RETRY_BUILD.md)。
+
+## 另一项目旧未知：本次批次专属确认（2026-10-19）
+
+默认跨项目未知仍阻止新增。当前用户明确允许保留某条旧未知请求及占位，并让本次新批次使用剩余名额时，可执行正式入口：
+
+```text
+node E:\metasocli\dist\cli\main.js batch run --root <current-story> --batch <current-batch-id> --confirm --accept-existing-unknown <old-local-operation-id>
+```
+
+CLI从共享账本核对原root、projectId、operationId、requestHash与inputHash，必须仍为无taskId的submit_unknown。确认保存在当前批次run.authorization.acceptedUnknown，并包含在run哈希中；调度与单项提交都验证批次及请求范围。它不重试、不修改、不取消旧任务，也不删除或释放旧占位。一个旧未知占位仍使新/已知活动最多三个，总名额仍为四个，下载仍最多两个。
+
+确认只适用于该不可变批次的确切planId、segmentId、requestHash和inputHash；不自动传给另一批次、项目或新请求。其他未确认未知或本轮新出现的未知仍停止派发。无当前用户明确确认时不得添加该参数；batch resume不能新增确认，仅沿用本批次已保存记录。旧请求找回taskId后仍按原ID查询；该入口不能把缺失回执解释为服务端失败。
+
+恢复仍用原batch resume，不创建新批次或更换runtime绕过记录。此确认不等于重试旧项目的付费授权。
