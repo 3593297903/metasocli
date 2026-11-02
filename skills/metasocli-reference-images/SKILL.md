@@ -53,7 +53,7 @@ node <package-root>/dist/cli/main.js images status --root <story> --plan <imageP
 
 部分段改用 `--selection <json>`；范围参数互斥。计划明确列出复用、首轮可发、依赖等待、规格冲突和请求数量。已有原文要求 2K/4K 而默认尺寸不满足时，选择文档支持且符合原要求的显式 size，不能改短原配方或删除规格文字。人物/场景/道具默认横板 1920x1088，竖首帧 1088x1920；均不冒充 2K/4K 或精确数学比例。
 
-API 模式把所有 ready 输入集中发出，每素材 n=1；200 个独立 ready 项就是 200 次独立请求。依赖等待的是实际参考文件，不是生成槽位；登记后立即解锁下游。下载默认2、解码2、登记1，不限制 ready 生成启动。已知账户限额不足会在 POST 前阻止整次启动；供应商真实容量未知时明确说明未验证。
+API 模式把所有 ready 输入集中发出，每素材 n=1；200 个独立 ready 项就是 200 次独立请求。依赖等待的是实际参考文件，不是生成槽位；登记后立即解锁下游。下载默认2、解码2、登记1，不限制 ready 生成启动。配置的 concurrent/RPM 在共享短事务内核验，额度不足保存未提交等待；batch 限制按冻结范围检查。没有已知额度时不增加任意并发上限；供应商真实容量仍未验证。
 
 CLI 自动保存完整回执、下载原文件、检查格式/大小并按条件登记。用 `images status` 的逐项文件和 `.metasocli/image-runs/<planId>-index.md` 展示首次结果；不做审美验收、OCR、自动重画或逐图确认。保存 1.1.0 API result 交接，使用每项 `.metasocli/image-receipts/<operationId>/execution.json` 与其实际文件 SHA-256，核对 requestedModel 来自请求、reportedModel 来自回执；缺报就填 null，不能推断底层型号。运行 result 校验器；CLI 已正式登记的同一文件无需再次 assets register。
 
@@ -80,3 +80,13 @@ node <package-root>/dist/cli/main.js assets list --root <story>
 大素材可按原有 `assets register --url <public-https-url>` 登记，CLI 下载核验并在提交前复核；不自动上传云存储。图片完成后返回上游继续 H3 计划和旁白音频处理。本技能不调用视频生成，两个成品提示词入口在未获视频生成授权时仍停在本地计划。
 
 当前用户明确要求未知图片再次生成时，使用[一次性图片计划重试](../../docs/IMAGE_API_USAGE.md#用户明确再次生成一次性图片计划重试)：先完成当前设计并import，再images plan --restart-of建立一个后继；images run --confirm --accept-unknown-result保存一次性新尝试授权。旧未知及其占位保留，不伪造失败；同一原计划只能有一个后继，恢复复用稳定的新operationId，新未知仍阻断。默认无此明确授权时继续禁止未知重发，不能自动循环重试。
+
+## 不同故事隔离与恢复
+
+完整遵循 [项目隔离与冷切换](../../docs/PROJECT_ISOLATION.md)。不同故事的缺图、依赖等待、暂停、未知或目录异常不阻止本故事使用空余容量；同故事锁、阶段互斥、未知阻断和一次性重试规则保留。默认不要求 --accept-existing-unknown；旧确认仅保留审计身份，不扩大授权或重发未知。
+
+图片保持 gpt-image-2.5 / all-ready / 有效300秒，配置的 concurrent/RPM 共享核验。视频保持 MiniMax-H3、context_ir_enabled:true，全机同 runtime 合计最多4个生成名额，项目 concurrency 为附加上限；1个外部未知留下3个空位，4个未知则新增视频等待，图片与原结果恢复仍可运行。不得删除旧未知、换 runtime 或伪造终态腾位。
+
+images run/resume/retry 与 batch run/resume/retry 支持 --capacity-wait-ms 30000 --capacity-poll-ms 250。耗尽后保留原计划/批次授权和 operationId，按原 resume 继续；准确区分本项目未知、依赖未就绪、共享容量等待、同项目进程占锁和协调器损坏。视频批次只查询当前故事，其他故事由其自身恢复落盘终态，不自动跟随外部 GET。
+
+升级先结束旧版生成进程，再统一切换构建和正文；活跃或不明旧全局锁不得抢占，不支持新旧二进制热混跑。原文、图序、时长适配及旁白归属不变；只有有旁白的段带原音频，普通入口不自动加旁白。默认授权停止点不变，本规则不新增任何付费授权。

@@ -146,11 +146,11 @@ it('rejects wrong identity, missing authorization, known tasks, other-project un
   await expect(authorizeVideoRetry(second.root,other.planId,'s1',f.old.operationId,true,true)).rejects.toMatchObject({code:'RETRY_FORBIDDEN'});
   const a=await authorizeVideoRetry(f.root,f.plan.planId,'s1',f.old.operationId,true,true);
   const ledger=await reconcileRuntime(second.root);
-  expect(await blockingSlots(second.root,ledger)).toHaveLength(1);
-  await expect(submit(second.root,other.planId,'s1',true,{client:f.client})).rejects.toMatchObject({code:'SUBMIT_UNKNOWN'});
+  expect(await blockingSlots(second.root,ledger)).toHaveLength(0);
+  expect((await submit(second.root,other.planId,'s1',true,{client:f.client})).status).toBe('submit_unknown');
   await writeFile(await retryPath(f.root,f.old.operationId),JSON.stringify({...a.authorization,inputHash:'0'.repeat(64)}));
   await expect(submit(f.root,f.plan.planId,'s1',true,{client:f.client},f.old.operationId,true)).rejects.toMatchObject({code:'RETRY_CONFLICT'});
-  expect(f.calls).toHaveLength(1);
+  expect(f.calls).toHaveLength(2);
 });
 it('records bounded redacted transport diagnostics including headers, cause code, HTTP status and request ID',async()=>{
   const f=await imported(),plan=await createPlan(f.root,'ep-1');

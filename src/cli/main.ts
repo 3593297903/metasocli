@@ -23,7 +23,7 @@ import { z } from 'zod';
 import { createBatchPlan, batchStatus, loadBatch, loadBatchRun } from '../jobs/batch-store.js';
 import { runBatch, authorizeBatchRetry } from '../jobs/batch.js';
 import { listVideoRetries, retryProgress } from '../jobs/video-retry.js';
-import { reconcileRuntime, occupied } from '../jobs/coordinator.js';
+import { reconcileRuntime, occupied, inspectRuntime, capacitySnapshot } from '../jobs/coordinator.js';
 import { createImagePlan, loadImageProfile } from '../images/planning.js';
 import { runImages, imageStatus, recoverImage, attachImageResult, resolveImage, type ImageDependencies } from '../images/run.js';
 import { imageCredentialStatus, loadImageApiKey } from '../images/credentials.js';
@@ -41,6 +41,7 @@ images run --root <path> --plan <imagePlanId> --confirm [--accept-unknown-result
            [--accept-existing-unknown <operationId,...>]  This plan only; retains older project records.
 images status --root <path> [--plan <imagePlanId>]
 images resume --root <path> --plan <imagePlanId>
+  images run/resume/retry: [--capacity-wait-ms <0..300000>] [--capacity-poll-ms <10..60000>] (30000 / 250 defaults)
 images recover --root <path> --operation <id>
 images attach-result --root <path> --operation <id> --file <image> --expected-sha256 <hash> --confirm-result-link
 images resolve --root <path> --operation <id> --outcome not-created|failed --evidence <json> --confirm-resolution
@@ -61,9 +62,11 @@ batch plan --root <path> (--episodes <ordered,ids>|--selection <json>|--all-epis
 batch run  --root <path> --batch <id> --confirm [--max-polls <1..720>] [--poll-ms <0..60000>]
            [--accept-existing-unknown <operationId,...>]  Exact old identities; retains their occupied slots.
 batch resume --root <path> --batch <id> [--max-polls <1..720>] [--poll-ms <0..60000>]
-batch retry --root <path> --batch <id> --operation <local-operation-id> --confirm --accept-unknown-result
+batch retry --root <path> --batch <id> --operation <local-operation-id> --confirm [--accept-unknown-result]
             [--max-polls <1..720>] [--poll-ms <0..60000>]
+            Failed/cancelled: original full batch authorization; no-ID unknown: --accept-unknown-result required.
 batch status --root <path> --batch <id>
+  batch run/resume/retry: [--capacity-wait-ms <0..300000>] [--capacity-poll-ms <10..60000>] (30000 / 250 defaults)
 batch register --root <path>  Register known existing tasks in the shared installation capacity ledger.
 status     --root <path> [--operation <id>] [--remote]
 resume     --root <path> --operation <id> [--max-polls <1..720>] [--poll-ms <0..60000>]
@@ -80,7 +83,8 @@ batch resume may create the remaining items of its saved, authorized scope. Rece
 images resume may POST unstarted items ONLY within its saved image authorization. images recover never creates.
 Image all-ready starts every ready request independently (n=1); no generation-slot pool or automatic POST retries.
 Images use METASOCLI_IMAGE_API_KEY / independent encrypted credentials. Real provider capacity remains unverified.
-Video slots are shared (max 4); downloads run separately (max 2). Only one batch scheduler runs per installation.
+Video slots are shared (max 4); downloads run separately (max 2). Each story has its own batch/image scheduler.
+Foreign unknowns retain capacity but do not veto free slots. Cold-switch all old schedulers before upgrading.
 An explicit unknown retry can incur duplicate billing: the original unknown retains its slot and history.
 Repeated retry of the same local operation reuses one stable new attempt; no old remote task ID is required.
 waiting_capacity means authorization saved, not sent. Batch retry prioritizes it as known tasks finish.
@@ -115,18 +119,24 @@ const flags: Record<string, { strings?: string[]; booleans?: string[] }> = {
   resume: { strings: ['operation', 'max-polls', 'poll-ms'] }, download: { strings: ['operation'], booleans: ['redownload-missing'] },
   'attach-task': { strings: ['operation', 'task'], booleans: ['confirm-task-link'] }, doctor: {},
   'batch plan': { strings: ['episodes', 'selection', 'concurrency'], booleans: ['all-episodes'] },
-  'batch run': { strings: ['batch', 'max-polls', 'poll-ms', 'scheduler-wait-ms', 'accept-existing-unknown'], booleans: ['confirm'] },
-  'batch resume': { strings: ['batch', 'max-polls', 'poll-ms', 'scheduler-wait-ms', 'accept-existing-unknown'] },
-  'batch retry': { strings: ['batch', 'operation', 'max-polls', 'poll-ms', 'scheduler-wait-ms'], booleans: ['confirm', 'accept-unknown-result'] },
+  'batch run': { strings: ['batch', 'max-polls', 'poll-ms', 'scheduler-wait-ms', 'accept-existing-unknown', 'capacity-wait-ms', 'capacity-poll-ms'], booleans: ['confirm'] },
+  'batch resume': { strings: ['batch', 'max-polls', 'poll-ms', 'scheduler-wait-ms', 'accept-existing-unknown', 'capacity-wait-ms', 'capacity-poll-ms'] },
+  'batch retry': { strings: ['batch', 'operation', 'max-polls', 'poll-ms', 'scheduler-wait-ms', 'capacity-wait-ms', 'capacity-poll-ms'], booleans: ['confirm', 'accept-unknown-result'] },
   'batch status': { strings: ['batch'] }, 'batch register': {},
   'images auth-status': {},
   'images plan': { strings:['episodes','selection','assets','profile','submission-mode','restart-of'],booleans:['all-episodes'] },
-  'images run': { strings:['plan','accept-existing-unknown'],booleans:['confirm','accept-unknown-result'] }, 'images resume': { strings:['plan'] },
+  'images run': { strings:['plan','accept-existing-unknown','capacity-wait-ms','capacity-poll-ms'],booleans:['confirm','accept-unknown-result'] }, 'images resume': { strings:['plan','capacity-wait-ms','capacity-poll-ms'] },
   'images status': { strings:['plan'] }, 'images recover': { strings:['operation'] },
   'images attach-result': { strings:['operation','file','expected-sha256'],booleans:['confirm-result-link'] },
   'images resolve': { strings:['operation','outcome','evidence'],booleans:['confirm-resolution'] },
-  'images retry': { strings:['operation'],booleans:['confirm'] },
+  'images retry': { strings:['operation','capacity-wait-ms','capacity-poll-ms'],booleans:['confirm'] },
 };
+function capacityOptions(v:Record<string,Value>){
+  const capacityWaitMs=number(v,'capacity-wait-ms'),capacityPollMs=number(v,'capacity-poll-ms');
+  if(capacityWaitMs!==undefined&&capacityWaitMs>300000)fail('CLI_ARGUMENT','--capacity-wait-ms must be 0–300000.');
+  if(capacityPollMs!==undefined&&(capacityPollMs<10||capacityPollMs>60000))fail('CLI_ARGUMENT','--capacity-poll-ms must be 10–60000.');
+  return {...(capacityWaitMs===undefined?{}:{capacityWaitMs}),...(capacityPollMs===undefined?{}:{capacityPollMs})};
+}
 function pollOptions(v: Record<string, Value>) {
   const maxPolls = number(v, 'max-polls'), pollIntervalMs = number(v, 'poll-ms');
   if (maxPolls !== undefined && (maxPolls < 1 || maxPolls > 720)) fail('CLI_ARGUMENT', '--max-polls must be 1–720.');
@@ -162,6 +172,7 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
         allEpisodes:v['all-episodes']===true,profile:await loadImageProfile(v.profile as string|undefined),submissionMode:required(v,'submission-mode'),...(v['restart-of']?{restartOf:required(v,'restart-of')}:{})});
       else if(command==='images status')data=await imageStatus(root,v.plan as string|undefined);
       else if(command==='images run'||command==='images resume'||command==='images retry') {
+        Object.assign(imageDeps,capacityOptions(v));
         if(command!=='images resume'&&v.confirm!==true)fail('IMAGE_NOT_AUTHORIZED','Authorize this image provider and frozen scope/new attempt before --confirm.');
         if(v['accept-existing-unknown']!==undefined)imageDeps.acceptExistingUnknown=required(v,'accept-existing-unknown').split(',').map(s=>s.trim());
         const retryOf=command==='images retry'?required(v,'operation'):undefined;
@@ -190,21 +201,23 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
       ...(v.selection !== undefined ? { selection: await readJson(resolve(required(v, 'selection'))) } : {}),
       allEpisodes: v['all-episodes'] === true, concurrency: number(v, 'concurrency'),
     }) };
-    if (command === 'batch status') return { exitCode: 0, data: await batchStatus(root, required(v, 'batch')) };
+    if (command === 'batch status') return { exitCode: 0, data: { ...await batchStatus(root, required(v, 'batch')),
+      capacity: capacitySnapshot(root, await inspectRuntime(v['runtime-dir'] as string | undefined ?? injected?.runtimeRoot)) } };
     if (command === 'batch register') {
       const ledger = await reconcileRuntime(root, v['runtime-dir'] as string | undefined ?? injected?.runtimeRoot);
-      return { exitCode: 0, data: { registeredProjects: ledger.projects, occupied: occupied(ledger), limit: 4, liveCheckPerformed: false } };
+      return { exitCode: 0, data: { registeredProjects: ledger.projects, occupied: occupied(ledger), limit: 4, liveCheckPerformed: false, capacity: capacitySnapshot(root, ledger) } };
     }
     if (command === 'batch run' || command === 'batch resume' || command === 'batch retry') {
+      if (command === 'batch retry' && v.confirm !== true) return { exitCode: 2, data: { error: { code: 'GENERATION_NOT_AUTHORIZED', message: 'batch retry needs current explicit confirmation for one new attempt.' } } };
       if(v['accept-existing-unknown']!==undefined&&command!=='batch run')fail('GENERATION_NOT_AUTHORIZED','Only batch run --confirm may add a scoped unknown acknowledgement.');
       if (command === 'batch run' && v.confirm !== true) fail('GENERATION_NOT_AUTHORIZED', 'batch run needs authorization for the frozen scope and inline IR.');
-      const id = required(v, 'batch'), plan = await loadBatch(root, id), polling = pollOptions(v), wait = number(v, 'scheduler-wait-ms');
+      const id = required(v, 'batch'), plan = await loadBatch(root, id), polling = pollOptions(v), capacity = capacityOptions(v), wait = number(v, 'scheduler-wait-ms');
       if (wait !== undefined && wait > 300000) fail('CLI_ARGUMENT', '--scheduler-wait-ms must be 0–300000.');
       if (command === 'batch resume' && !await loadBatchRun(root, plan)) fail('GENERATION_NOT_AUTHORIZED', 'No saved batch authorization; resume cannot authorize new work.');
       const dependencies = await deps();
       const old = command === 'batch retry' ? required(v, 'operation') : undefined;
       if (old) await authorizeBatchRetry(root, id, old, v.confirm === true, v['accept-unknown-result'] === true, dependencies);
-      const result = await runBatch(root, id, command === 'batch run', { ...dependencies, ...(v['accept-existing-unknown']?{acceptExistingUnknown:required(v,'accept-existing-unknown').split(',').map(s=>s.trim())}:{}), ...(old ? { retryOperationId: old } : {}), ...(!injected ? { onStart: (summary: unknown) => { process.stderr.write(JSON.stringify({ event: 'batch-start', summary }) + '\n'); } } : {}) }, { ...polling, ...(wait === undefined ? {} : { schedulerWaitMs: wait }) });
+      const result = await runBatch(root, id, command === 'batch run', { ...dependencies, ...(v['accept-existing-unknown']?{acceptExistingUnknown:required(v,'accept-existing-unknown').split(',').map(s=>s.trim())}:{}), ...(old ? { retryOperationId: old } : {}), ...(!injected ? { onStart: (summary: unknown) => { process.stderr.write(JSON.stringify({ event: 'batch-start', summary }) + '\n'); } } : {}) }, { ...polling, ...capacity, ...(wait === undefined ? {} : { schedulerWaitMs: wait }) });
       return { exitCode: result.run?.status === 'complete' ? 0 : 2, data: result };
     }
     if (command === 'import') {

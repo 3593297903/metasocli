@@ -15,7 +15,7 @@ node E:\metasocli\dist\cli\main.js batch retry --root <story> --batch <batchId> 
 
 状态输出 `videoRetries`（批次为 `retries`）区分 `waiting_capacity`、`reserved`、`intent_saved`、`receipt_saved`、`submit_unknown`、`original_recovered`；Job 仍保留原兼容格式。waiting_capacity 表示授权已保存且尚未发送，不是已受理或生成失败。只有已证实尚未写发送意图的准备项能继续；存在发送意图而无回执时保持未知。授权文件之后、Job 之前中断可重建同一身份；存在提交证据却缺 Job 时拒绝重建。
 
-旧未知任务始终计入四个可能占用名额。确认只解除本项目该条未知对新增派发的全面阻断，不释放它的名额，也不解除其他未确认未知、其他项目未知或身份冲突。比如三个已知活动任务加一个旧未知已经占满四个名额，新尝试须等待一个已知任务确认终态落盘；留下一个旧未知时，新/已知活动最多三个。没有可查询 ID 且可能名额全满时返回容量阻塞，保存授权并结束本轮，不忙循环。
+旧未知任务始终计入四个可能占用名额。确认只解除本项目该条未知对新增派发的全面阻断，不释放它的名额，也不解除本项目其他未确认未知或身份冲突。其他项目未知默认只占可能名额，不额外否决空位。比如三个已知活动任务加一个旧未知已经占满四个名额，新尝试须等待一个已知任务确认终态落盘；留下一个旧未知时，新/已知活动最多三个。没有可查询 ID 且可能名额全满时按容量预算有界等待，保存授权并返回可恢复暂停，不忙循环。
 
 批次重试优先补上该段，继续查询和下载已接受任务。其余段只沿用已保存的原批次范围授权；没有原授权时保存仅该新 operationId 的 `authorization.retryOnly` 范围，普通 batch resume 不扩大它。正常下载仍独立最多两个；下载失败只恢复原下载。每个新请求保持 `context_ir_enabled:true`、完整原文、时长向上取整、图序和原旁白绑定。
 
@@ -40,22 +40,18 @@ node E:\metasocli\dist\cli\main.js generate --root <story> --plan <planId> --seg
 
 此命令不带 `--accept-unknown-result`，创建独立 C（A=attempt 1、B=2 时，C=3）。原 A、B 与 A→B 授权完整保留，不重新启用 B。同一命令重复执行复用 C；准备落盘后中断可以首次发送 C，意图之后无回执保持未知且不重发，已有回执按原 C 的 taskId 恢复。原来带 `--accept-unknown-result` 的 A 命令始终绑定原 A→B 授权，即使 A 后来失败，也不能把重复执行解释成新的授权。
 
+若原批次已保存完整范围授权，也可直接执行 `batch retry --root <story> --batch <batchId> --operation <failedOperationId> --confirm`（不带 `--accept-unknown-result`）。它先保存一个独立 prepared 尝试，再交回同项目调度器；准备后中断由原 `batch resume` 接回。同一命令重复执行始终复用该尝试，即使新尝试再次失败、未知或被 429 明确拒绝，也不会由这次授权继续 POST。没有完整批次授权、或只有 `retryOnly` 授权时不能扩大范围，使用明确范围的单段重试。
+
 原范围已授权的批次使用 `batch resume`，按最新有效尝试重建为 C 的索引，接回准备中的 C 或查询/下载已接受的 C。只有 B 的 `retryOnly` 授权的批次不能扩大为对 C 的提交授权；C 已准备但未发送时重复上述单段命令，已接受时可按 C 的 ID 恢复。C 再次明确失败，下一次授权针对 C；C 再次未知，下一次授权针对 C 并带风险确认参数。重复任何针对 A 的旧命令都不产生 D。
 
 仅查询失败、超时、queued/running 或未知状态不属于供应商明确失败，继续用原 ID 恢复。批次查询和创建并行，回执/批次索引检查点的合法状态可能已是 running；不会为了恢复而降级为 queued。
 
 本轮没有付费调用。另一设备须部署包含此修复的构建和 Skill 正文，原 `e781ccb1a4b0fefb63cf76b2eea1480ee4cbe59d` 不包含本功能；见 [新设备修复版本说明](NEW_DEVICE_RETRY_BUILD.md)。
 
-## 另一项目旧未知：本次批次专属确认（2026-10-19）
+## 另一项目旧未知：默认隔离与旧确认兼容（2026-11-02）
 
-默认跨项目未知仍阻止新增。当前用户明确允许保留某条旧未知请求及占位，并让本次新批次使用剩余名额时，可执行正式入口：
+不同故事默认隔离，不再要求跨项目确认参数。一个外部未知仍占一个可能名额，当前项目最多使用余下三个；四个占满只让新增视频等待。当前项目批次只查询自己的原任务，外部错误不会暂停它。外部任务由所属故事恢复并持久化终态后释放名额，见 [项目隔离与冷切换](PROJECT_ISOLATION.md)。
 
-```text
-node E:\metasocli\dist\cli\main.js batch run --root <current-story> --batch <current-batch-id> --confirm --accept-existing-unknown <old-local-operation-id>
-```
+旧 `batch run --confirm --accept-existing-unknown <operationId,...>` 仍解析并核对共享记录的 root/projectId/operationId/requestHash/inputHash；run.authorization.acceptedUnknown 继续验哈希并绑定原范围。跨项目记录保留审计意义，batch resume 不需要补充确认；同项目豁免仍验证真实授权和身份。参数不授权重试旧任务，也不能释放其占位或扩大范围。
 
-CLI从共享账本核对原root、projectId、operationId、requestHash与inputHash，必须仍为无taskId的submit_unknown。确认保存在当前批次run.authorization.acceptedUnknown，并包含在run哈希中；调度与单项提交都验证批次及请求范围。它不重试、不修改、不取消旧任务，也不删除或释放旧占位。一个旧未知占位仍使新/已知活动最多三个，总名额仍为四个，下载仍最多两个。
-
-确认只适用于该不可变批次的确切planId、segmentId、requestHash和inputHash；不自动传给另一批次、项目或新请求。其他未确认未知或本轮新出现的未知仍停止派发。无当前用户明确确认时不得添加该参数；batch resume不能新增确认，仅沿用本批次已保存记录。旧请求找回taskId后仍按原ID查询；该入口不能把缺失回执解释为服务端失败。
-
-恢复仍用原batch resume，不创建新批次或更换runtime绕过记录。此确认不等于重试旧项目的付费授权。
+容量等待默认30000ms、检查间隔250ms，支持 `--capacity-wait-ms`（0–300000）和 `--capacity-poll-ms`（10–60000）。预算耗尽保留原授权、pending 和准确等待轨迹，原 batch resume 继续；未发送不等于失败或未知。同项目运行权仍受保护，普通 status/resume/download 不创建任务。冷切换前结束旧版本进程；活跃/不明旧安装级锁不会被抢占，不支持新旧二进制热混跑。

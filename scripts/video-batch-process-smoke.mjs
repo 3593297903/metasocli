@@ -45,16 +45,14 @@ try{
   for(const w of first)w.child.send('release');
   for(const w of first){const result=(await w.until(m=>m.result)).result;assert.equal(result.exitCode,0,JSON.stringify(result));await w.ended;}
   const holder=worker(a,'query-gate');await holder.until(m=>m.checkpoint==='query-gate');
-  const competitor=worker(b,'no-wait');assert.equal((await competitor.until(m=>m.error)).error.code,'LOCK_BUSY');await competitor.ended;
-  const ordinary=worker(b,'running','s3');assert.equal((await ordinary.until(m=>m.result)).result.data.error.code,'SCHEDULER_BUSY');await ordinary.ended;
+  const competitor=worker(a,'no-wait');assert.equal((await competitor.until(m=>m.error)).error.code,'LOCK_BUSY');await competitor.ended;
+  const ordinary=worker(a,'running','s3');assert.equal((await ordinary.until(m=>m.result)).result.data.error.code,'SCHEDULER_BUSY');await ordinary.ended;
   const recovering=worker(b,'batch-running');
-  await new Promise(r=>setTimeout(r,200));
-  assert.equal(recovering.messages.some(m=>m.result||m.post||m.error),false,'Competing batch must wait for the active scheduler');
-  await holder.kill();
   const resumed=await recovering.until(m=>m.result);await recovering.ended;
+  assert.equal(holder.child.exitCode,null,'B completes its bounded run before A releases its scheduler');await holder.kill();
   assert.equal(resumed.result.summary.pending,1);assert.equal(recovering.messages.filter(m=>m.post).length,0);
   assert.equal(occupied(await reconcileRuntime(b.root)).length,4);
-  report.push({scenario:'two projects, four CLI processes, batch contention and SIGKILL',posts:4,occupied:4,fifth:'CAPACITY_FULL',otherBatch:'LOCK_BUSY',ordinaryDuringBatch:'SCHEDULER_BUSY',competingBatchWaited:true,recoveryPosts:0});
+  report.push({scenario:'two projects, four CLI processes, project ownership and SIGKILL',posts:4,occupied:4,fifth:'CAPACITY_FULL',sameBatch:'LOCK_BUSY',sameStoryOrdinary:'SCHEDULER_BUSY',otherBatchCompletedBeforeARelease:true,recoveryPosts:0});
   console.log('PASS two projects / four CLI processes / batch ownership / process recovery: 4 POST, no duplicates or capacity bypass');
   await mkdir(join(packageRoot,'.work'),{recursive:true});await writeFile(join(packageRoot,'.work/video-batch-process-evidence.json'),JSON.stringify({fakeClientsOnly:true,report},null,2));
 }finally{

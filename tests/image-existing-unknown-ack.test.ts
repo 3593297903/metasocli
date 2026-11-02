@@ -18,14 +18,14 @@ async function unknown(root:string,runtimeRoot:string){
   return (await listImageJobs(root))[0]!;
 }
 
-it('requires an explicit CLI confirmation, preserves the old unknown, and resumes the same reserved plan',async()=>{
+it('foreign unknown needs no flag; the legacy CLI confirmation still preserves audit identity and the reserved plan',async()=>{
   const old=await imageFixture(),current=await imageFixture(),other=await imageFixture();
   const runtimeRoot=join(dirname(current.root),'runtime');
   const prior=await unknown(old.root,runtimeRoot),originalBytes=await readFile(join(old.root,`.metasocli/image-jobs/${prior.operationId}.json`));
   const p=await plan(current.root);let posts=0;
   const deps={runtimeRoot,client:{async create(){posts++;return imageResponse();}}};
-  const blocked=await runImages(current.root,p.planId,true,deps);
-  expect(blocked.summary.started).toBe(0);expect(posts).toBe(0);
+  await expect(runImages(current.root,p.planId,true,{...deps,checkpoint:async(point)=>{if(point==='prepared')throw Error('offline prepared interruption');}})).rejects.toThrow('offline prepared');
+  expect(posts).toBe(0);
   const reserved=(await listImageJobs(current.root))[0]!.operationId;
   const args=['images','run','--root',current.root,'--plan',p.planId,'--accept-existing-unknown',prior.operationId];
   expect((await runCli(args,undefined,deps)).exitCode).not.toBe(0);expect(posts).toBe(0);
@@ -40,7 +40,7 @@ it('requires an explicit CLI confirmation, preserves the old unknown, and resume
   expect((await runCli(['images','resume','--root',current.root,'--plan',p.planId],undefined,deps)).exitCode).toBe(0);
   expect(posts).toBe(1);
   expect((await runCli(['images','resume','--root',current.root,'--plan',p.planId,'--accept-existing-unknown',prior.operationId],undefined,deps)).exitCode).not.toBe(0);
-  const op=await plan(other.root);await runImages(other.root,op.planId,true,deps);expect(posts).toBe(1);
+  const op=await plan(other.root);await runImages(other.root,op.planId,true,deps);expect(posts).toBe(2);
 });
 
 it('rejects missing and duplicate identities and cannot add an acknowledgement through resume',async()=>{
@@ -51,7 +51,7 @@ it('rejects missing and duplicate identities and cannot add an acknowledgement t
   await expect(runImages(current.root,p.planId,true,{...deps,acceptExistingUnknown:[randomUUID()]})).rejects.toMatchObject({code:'IMAGE_SCOPE_ACK_INVALID'});
   await expect(runImages(current.root,p.planId,true,{...deps,acceptExistingUnknown:[prior.operationId,prior.operationId]})).rejects.toMatchObject({code:'IMAGE_SCOPE_ACK_INVALID'});
   await expect(runImages(current.root,p.planId,false,{...deps,acceptExistingUnknown:[prior.operationId]})).rejects.toMatchObject({code:'IMAGE_SCOPE_ACK_REQUIRED'});
-  expect(posts).toBe(0);
+  expect(posts).toBe(1);
 });
 
 it('a new current-project unknown halts dispatch and cannot be included in the old-project acknowledgement',async()=>{
@@ -66,24 +66,25 @@ it('a new current-project unknown halts dispatch and cannot be included in the o
   expect(posts).toBe(before);
 });
 
-it('unlisted unknowns still block the exact plan and can only be added by a new explicit confirmation',async()=>{
+it('unlisted foreign unknowns do not block; additional legacy confirmations remain auditable',async()=>{
   const old=await imageFixture(),second=await imageFixture(),current=await imageFixture(),runtimeRoot=join(dirname(current.root),'runtime');
   const first=await unknown(old.root,runtimeRoot),next=await unknown(second.root,join(dirname(second.root),'other-runtime'));
   await recoverImage(second.root,next.operationId,{runtimeRoot});
   const p=await plan(current.root);let posts=0;const deps={runtimeRoot,client:{async create(){posts++;return imageResponse();}}};
-  await runImages(current.root,p.planId,true,{...deps,acceptExistingUnknown:[first.operationId]});expect(posts).toBe(0);
+  await runImages(current.root,p.planId,true,{...deps,acceptExistingUnknown:[first.operationId]});expect(posts).toBe(1);
   await runImages(current.root,p.planId,false,deps);
-  expect(posts).toBe(0);
+  expect(posts).toBe(1);
   const result=await runImages(current.root,p.planId,true,{...deps,acceptExistingUnknown:[next.operationId]});
   expect(result.summary.registered).toBe(1);expect(posts).toBe(1);
 });
 
-it('saved acknowledgements reject changed original request identities without any new POST',async()=>{
+it('foreign job corruption does not block saved acknowledgements; its own recovery still rejects corruption',async()=>{
   const old=await imageFixture(),current=await imageFixture(),runtimeRoot=join(dirname(current.root),'runtime');
   const prior=await unknown(old.root,runtimeRoot),p=await plan(current.root);let posts=0;
   const deps={runtimeRoot,client:{async create(){posts++;return imageResponse();}}};
   await runImages(current.root,p.planId,true,{...deps,acceptExistingUnknown:[prior.operationId]});expect(posts).toBe(1);
   await saveImageJob(old.root,{...prior,requestHash:'a'.repeat(64)});
-  await expect(runImages(current.root,p.planId,false,deps)).rejects.toMatchObject({code:'IMAGE_JOB_CONFLICT'});
+  expect((await runImages(current.root,p.planId,false,deps)).summary.registered).toBe(1);
+  await expect(runImages(old.root,prior.planId,false,deps)).rejects.toMatchObject({code:'IMAGE_JOB_CONFLICT'});
   expect(posts).toBe(1);
 });

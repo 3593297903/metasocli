@@ -44,7 +44,7 @@ it('reuses ready assets; excludes unused and narration; detects frozen recipe/si
   const p=await planFor(f.root);expect(p.items.map(i=>i.action)).toEqual(['reuse','generate']);
   let posts=0;await expect(runImages(f.root,(await planFor(f.root,{providerLimits:{concurrent:1,source:'offline limit fixture',checkedAt:new Date().toISOString()}})).planId,true,{client:{async create(){posts++;return imageResponse();}}})).resolves.toMatchObject({summary:{reused:1,registered:1}});
   expect(posts).toBe(1);expect((await planFor(f.root)).items.every(i=>i.action==='reuse')).toBe(true);
-  const g=await imageFixture(2),limited=await planFor(g.root,{providerLimits:{rpm:1,source:'offline',checkedAt:new Date().toISOString()}});
+  const g=await imageFixture(2),limited=await planFor(g.root,{providerLimits:{batch:1,source:'offline',checkedAt:new Date().toISOString()}});
   await expect(runImages(g.root,limited.planId,true,{client:{async create(){posts++;return imageResponse();}}})).rejects.toMatchObject({code:'IMAGE_PROVIDER_LIMIT'});expect(posts).toBe(1);
   await expect(createImagePlan(g.root,{assets:g.ids,profile:{model:'other'}})).rejects.toMatchObject({code:'INVALID_INPUT'});
   const gp=await planFor(g.root);await writeFile(join(g.root,gp.items[0]!.promptPath),'shortened');await expect(runImages(g.root,gp.planId,true)).rejects.toMatchObject({code:'IMAGE_PLAN_STALE'});
@@ -115,7 +115,7 @@ it('restores a reserved retry before its job write with the same operation and n
   await runImages(f.root,p.planId,false,{client:{async create(){posts++;return imageResponse();}}});const recovered=(await listImageJobs(f.root)).find(j=>j.operationId===reserved)!;expect(recovered).toMatchObject({status:'registered',attempt:2,retryOf:original.operationId});expect(posts).toBe(2);
 });
 it('independent quota owner refuses another scheduler and terminal history uses no video ledger',async()=>{
-  const f=await imageFixture(),p=await planFor(f.root),lease=await acquireImageScheduler(p.profile);
+  const f=await imageFixture(),p=await planFor(f.root),lease=await acquireImageScheduler(f.root,p.profile);
   try{await expect(runImages(f.root,p.planId,true)).rejects.toMatchObject({code:'LOCK_BUSY'});}finally{await lease.release();}
   await runImages(f.root,p.planId,true,{client:{async create(){return imageResponse();}}});
   expect(await readFile(join(imageRuntime(profile),'ledger.json'),'utf8')).not.toContain('MiniMax');
@@ -143,7 +143,7 @@ it('documented defaults remain landscape boards/portrait first frames; high spec
 });
 it('per-response and total disk limits retain incomplete evidence and release locks; known shortage sends nothing',async()=>{
   const f=await imageFixture(),p=await planFor(f.root,{maxTempBytes:1000});let posts=0;await expect(runImages(f.root,p.planId,true,{client:{async create(){posts++;return imageResponse();}}})).rejects.toMatchObject({code:'IMAGE_STORAGE_LIMIT'});expect(posts).toBe(0);
-  const lease=await acquireImageScheduler(profile);await lease.release();
+  const lease=await acquireImageScheduler(f.root,profile);await lease.release();
   const path=join(dirname(f.root),'response.bin');await expect(streamResponse(new Response('x'.repeat(2048)),path,1024,new DiskBudget(99999))).rejects.toMatchObject({code:'IMAGE_RESPONSE_LIMIT'});
   await expect(streamResponse(new Response('x'.repeat(2048)),path,4096,new DiskBudget(1000))).rejects.toMatchObject({code:'IMAGE_STORAGE_LIMIT'});
   let active=0,max=0;const sem=new Semaphore(2);await Promise.all(Array.from({length:10},()=>sem.use(async()=>{max=Math.max(max,++active);await new Promise(r=>setTimeout(r,2));active--;})));expect(max).toBe(2);

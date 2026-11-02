@@ -37,7 +37,7 @@ node E:\metasocli\dist\cli\main.js images status --root <story> --plan <imagePla
 
 所有输入已就绪的项独立启动；200 个独立 ready 项发出200次请求，不等第一张生成完成。首次为160张、40张依赖时会准确报告等待；原参考图实际登记后立刻释放后续就绪请求。HTTP 响应先逐项流式落盘，再进行默认2个解码、2个下载和1个登记。这些是接收后的限制，不是图片生成槽位。视频仍四并发持续补位、两个下载。
 
-同一个 `quotaGroup` 同时只有一个运行进程。不要更换组名或 `--runtime-dir` 绕开未决记录。已知 `providerLimits.concurrent/rpm/batch` 小于待提交范围则任何 POST 前报错；还须提供 source/checkedAt。未知额度明确为待验证，不会默认声称供应商能受理200项。
+同一个故事同时只有一个图片运行进程，不同故事可同时 all-ready。相同 quotaGroup 的已知 providerLimits.concurrent/rpm 共享预留和时间窗口；不足时保存 IMAGE_CAPACITY_WAIT，原计划 resume 继续。batch 小于冻结待提交范围仍在任何 POST 前报错，source/checkedAt 仍必需。无已知限额不加任意并发数字；不声称供应商能受理200项。详见 [项目隔离、等待参数与冷切换](PROJECT_ISOLATION.md)。
 
 每项响应最多45MiB，图片最多30MiB，结构化记录保持8MiB；图片尺寸256–5760、比例0.4–2.5，且实际尺寸须匹配请求尺寸。不自动压缩、裁图或删引用。启动按每个待发项“最大响应+三份最大图片+256KiB元数据余量”并加上尚需建立的去重参考快照做保守磁盘预检，运行时限制临时存储；200个独立项默认约26.42GiB基础预留，实际结果通常更小，不能因此忽略磁盘要求。供应商 usage 元数据最多16KiB、revised_prompt 最多128000字节，超出保留完整原响应并报告契约错误。
 
@@ -105,7 +105,7 @@ node E:\metasocli\dist\cli\main.js images plan --root <story> --episodes <ordere
 node E:\metasocli\dist\cli\main.js images run --root <story> --plan <newImagePlanId> --confirm --accept-unknown-result
 ```
 
-原计划只能绑定一个已授权后继。新计划冻结当前素材配方、引用、范围和请求预算；run保存原未知operationId与requestHash的明确接受记录。旧未知、原回执、请求占位和成功图片全部保留；只将原计划中确认从未进入提交的等待项标记superseded。旧计划不能继续派发，新后继中同一素材每项至多一个新operationId；同assetId的新尝试保存retryOf和单项授权。其他项目或新一轮出现的未知仍阻断未发送项。重试需要用户当前授权，不能自动循环建立后继。
+原计划只能绑定一个已授权后继。新计划冻结当前素材配方、引用、范围和请求预算；run保存原未知operationId与requestHash的明确接受记录。旧未知、原回执、请求占位和成功图片全部保留；只将原计划中确认从未进入提交的等待项标记superseded。旧计划不能继续派发，新后继中同一素材每项至多一个新operationId；同assetId的新尝试保存retryOf和单项授权。本项目新一轮出现的未知仍阻断本项目未发送项；其他项目未知仅保留配置额度中的可能占用。重试需要用户当前授权，不能自动循环建立后继。
 
 恢复只用 `images resume --root <story> --plan <newImagePlanId>`；不再次新建后继，不重新发已提交项。新尝试再次502/断线时仍保留为submit_unknown；先保存已返回的其他结果，再报告准确缺项。该功能不修复供应商网关故障，也不承诺并发容量或底层模型。
 
@@ -115,16 +115,8 @@ node E:\metasocli\dist\cli\main.js images run --root <story> --plan <newImagePla
 
 原始API证据还可核对HTTP500/new_api_error/convert_request_failed，且message以image is required开头、原请求为带参考文件的images/edits。该明确的生成前参数转换拒绝仅可解除为not-created；CLI核对相同原始响应字节与请求身份，保留供应商request id。修复多图字段须使用新operationId和正式授权，不能覆写旧请求或把通用500解释成未受理。
 
-## 本次图片计划专属确认：保留另一项目旧未知（2026-10-29）
+## 旧跨项目确认参数兼容（2026-11-02）
 
-默认仍由任意未处理的图片未知请求阻止新派发。用户明确要求忽略指定旧项目、继续当前已冻结图片范围时，可使用：
+其他故事的未知默认不阻止当前故事 ready 项，不再需要 `--accept-existing-unknown`。原参数仍接受精确的其他项目旧未知 operationId，并校验 root/projectId/planId/assetId/fingerprint/requestHash；保存的 acceptedExistingUnknown 字段继续验哈希和保留审计意义，只核对共享快照，不重新打开其他故事文件。当前项目未知不能用此参数绕过。
 
-```powershell
-node E:\metasocli\dist\cli\main.js images run --root <story> --plan <imagePlanId> --confirm --accept-existing-unknown <oldOperationId,...>
-```
-
-确认绑定当前planId/planHash以及旧请求的root、projectId、planId、operationId、assetId、fingerprint、requestHash，写入本次图片run的已哈希授权后才可能提交。既有未派发run保留原operationId。旧项目、未知任务、原回执和共享账本占位均保留；不会查询或重发旧请求，也不将其改为失败。
-
-只能确认另一项目中已存在的submit_unknown；当前项目或本轮新出现的未知仍阻止后续派发。未列出的其他未知仍阻止派发。其他计划不继承本次确认，不能清账本、更换quotaGroup/runtime或直发API代替正式入口。未提供本次明确确认时旧行为不变。
-
-恢复使用原`images resume --root <story> --plan <imagePlanId>`，沿用保存的原范围授权和旧请求身份确认；resume不能新增确认。若旧请求身份变化或记录消失，拒绝继续并保留所有证据。此确认只允许本次图片计划继续，既不证明旧请求未受理，也不承诺供应商容量或授权视频生成。
+原 `images resume --root <story> --plan <imagePlanId>` 保留范围、operationId、attempt 和原授权；不需要再确认。仅在当前用户要求记录指定旧请求时才添加兼容参数，resume 不能新增确认。默认隔离不授权重发旧任务，不释放未知容量；已知额度不足按 [容量等待](PROJECT_ISOLATION.md) 恢复。

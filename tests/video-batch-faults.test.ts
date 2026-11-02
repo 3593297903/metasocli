@@ -65,11 +65,12 @@ it('shares capacity across two projects and normal generate/submit-only; schedul
   const cli=await runCli(['generate','--root',b.root,'--plan',planB,'--segment','s1','--confirm','--submit-only'],{client});
   expect(cli.exitCode).toBe(0); expect(posts).toBe(4);
   await expect(submit(b.root,planB,'s2',true,{client})).rejects.toMatchObject({code:'CAPACITY_FULL'});
-  const result=await runBatch(b.root,b.batch.plan.batchId,true,{client},polling); expect(result.summary.pending).toBe(2);expect(posts).toBe(4);
-  const scheduler=await acquireScheduler(runtimeDirectory());
+  const result=await runBatch(b.root,b.batch.plan.batchId,true,{client},{...polling,capacityWaitMs:0}); expect(result.summary.pending).toBe(2);expect(posts).toBe(4);
+  const scheduler=await acquireScheduler(b.root,runtimeDirectory());
   try {
     await expect(submit(b.root,planB,'s2',true,{client})).rejects.toMatchObject({code:'SCHEDULER_BUSY'});
-    await expect(runBatch(a.root,a.batch.plan.batchId,true,{client},{...polling,schedulerWaitMs:0})).rejects.toMatchObject({code:'LOCK_BUSY'});
+    await expect(runBatch(b.root,b.batch.plan.batchId,true,{client},{...polling,schedulerWaitMs:0})).rejects.toMatchObject({code:'LOCK_BUSY'});
+    expect((await runBatch(a.root,a.batch.plan.batchId,true,{client},{...polling,schedulerWaitMs:0,capacityWaitMs:0})).summary.active).toBe(3);
   }finally{await scheduler.release();}
   expect(occupied(await reconcileRuntime(a.root))).toHaveLength(4);
 },60000);

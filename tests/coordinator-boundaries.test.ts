@@ -107,21 +107,21 @@ it.each([false, true])('a completed project can be archived without blocking a n
   expect(result.exitCode, JSON.stringify(result.data)).toBe(0); expect(posts).toBe(2);
   const ledger = await readLedger(); expect(occupied(ledger)).toHaveLength(0);
   expect(ledger.slots.find(slot => slot.operationId === oldSlot.operationId)).toEqual(oldSlot);
-  expect(ledger.projects.find(project => project.projectId === oldSlot.projectId)).toHaveProperty('retiredAt');
+  expect(ledger.projects.find(project => project.projectId === oldSlot.projectId)).toMatchObject({root:a.root});
   expect((await listJobs(archived))[0]).toMatchObject({ operationId: oldSlot.operationId, taskId: oldSlot.taskId, status: 'downloaded' });
   // Original root restored: explicit access revalidates history and reuses its task, not a new POST.
   await rename(archived, a.root);
   expect((await runCli(generateArgs(a.root, a.batch.plan.items[0]!.planId), { client })).exitCode).toBe(0);
   expect(posts).toBe(2);
-  records.push({ name: 'completed archive', legacy, posts, newProjectPosts: 1, preserved: oldSlot, retired: true });
+  records.push({ name: 'completed archive', legacy, posts, newProjectPosts: 1, preserved: oldSlot, snapshotOnly: true });
 }, 45000);
 
 it.each(['reserved', 'prepared', 'submitting', 'queued', 'running', 'submit_unknown', 'query_unknown'] as const)(
-  'a missing %s project retains its reservation and blocks new creation', async status => {
+  'a missing %s project retains its snapshot and allows another story to use free capacity', async status => {
     const a = await batchFixture([1]), b = await batchFixture([1]); let posts = 0;
     const unknown = status === 'submit_unknown', beforePost = ['reserved', 'prepared', 'submitting'].includes(status);
     const client: VideoClient = {
-      async create() { posts++; if (unknown) throw new Error('accepted but response lost'); return { taskId: 'protected-original-task', evidence }; },
+      async create() { posts++; if (unknown && posts===1) throw new Error('accepted but response lost'); return { taskId: 'protected-original-task-'+posts, evidence }; },
       async query(taskId) { return { taskId, status: status === 'query_unknown' ? 'unknown' : 'running', rawStatus: status, evidence }; },
     };
     await runCli(generateArgs(a.root, a.batch.plan.items[0]!.planId), { client,
@@ -135,13 +135,13 @@ it.each(['reserved', 'prepared', 'submitting', 'queued', 'running', 'submit_unkn
     // A prior coordinator may have persisted submitting just before the owner died.
     if (status === 'submitting') await rewriteLegacyLedger(ledger => { ledger.slots[0]!.status = 'submitting'; });
     if (status === 'query_unknown') await rewriteLegacyLedger(ledger => { ledger.projects[0]!.retiredAt = new Date().toISOString(); });
-    const original = await readFile(ledgerPath(), 'utf8'), before = await readLedger(), postsBeforeMove = posts;
-    expect(before.slots[0]!.status).toBe(status);
+    const before = await readLedger(), postsBeforeMove = posts;
+    expect(before.slots[0]!.status).toBe(status==='prepared'?'reserved':status);
     const archived = await moveFixture(a.root);
-    const rejected = await runCli(generateArgs(b.root, b.batch.plan.items[0]!.planId), { client });
-    expect(rejected).toMatchObject({ exitCode: 1, data: { error: { code: 'COORDINATOR_PROJECT_MISSING' } } }); expect(posts).toBe(postsBeforeMove);
-    expect(await readFile(ledgerPath(), 'utf8')).toBe(original);
-    expect(occupied(await readLedger())).toHaveLength(1);
+    const accepted = await runCli(generateArgs(b.root, b.batch.plan.items[0]!.planId), { client });
+    expect(accepted).toMatchObject({ exitCode: 0 }); expect(posts).toBe(postsBeforeMove+1);
+    expect((await readLedger()).slots.find(s=>s.operationId===before.slots[0]!.operationId)).toEqual(before.slots[0]);
+    expect(occupied(await readLedger())).toHaveLength(2);
     // Moving the active directory is not a supported way to reacquire its identity/capacity.
     expect((await runCli(['batch', 'register', '--root', archived], { client })).exitCode).toBe(1);
     await rename(archived, a.root);
@@ -150,21 +150,21 @@ it.each(['reserved', 'prepared', 'submitting', 'queued', 'running', 'submit_unkn
       if (!unknown) {
         const recovered = await runCli(['status', '--root', a.root, '--operation', job!.operationId, '--remote'], { client });
         expect(recovered.exitCode).toBe(status === 'query_unknown' ? 2 : 0);
-        expect((await listJobs(a.root))[0]!.taskId).toBe('protected-original-task');
+        expect((await listJobs(a.root))[0]!.taskId).toBe('protected-original-task-1');
       }
       await runCli(generateArgs(a.root, a.batch.plan.items[0]!.planId), { client });
-      expect(posts).toBe(postsBeforeMove);
+      expect(posts).toBe(postsBeforeMove+1);
     }
-    records.push({ name: 'missing protected root', status, posts, newProjectPosts: 0, retainedSlot: before.slots[0] });
+    records.push({ name: 'missing protected root', status, posts, newProjectPosts: 1, retainedSlot: before.slots[0] });
   }, 30000);
 
-it('does not treat a missing empty registration as confirmed terminal history', async () => {
+it('preserves a missing empty registration without inventing occupied or terminal tasks', async () => {
   const a = await batchFixture([1]), b = await batchFixture([1]); let posts = 0;
   await reconcileRuntime(a.root);
   const original = await readFile(ledgerPath(), 'utf8');
   await moveFixture(a.root);
-  const client: VideoClient = { async create() { posts++; throw new Error('must not submit'); }, async query() { throw new Error('unused'); } };
+  const client: VideoClient = { async create() { posts++; return {taskId:'new-independent-task',evidence}; }, async query() { throw new Error('unused'); } };
   const result = await runCli(generateArgs(b.root, b.batch.plan.items[0]!.planId), { client });
-  expect(result).toMatchObject({ exitCode: 1, data: { error: { code: 'COORDINATOR_PROJECT_MISSING' } } });
-  expect(posts).toBe(0); expect(await readFile(ledgerPath(), 'utf8')).toBe(original);
+  expect(result).toMatchObject({ exitCode: 0 });
+  expect(posts).toBe(1); const ledger=await readLedger();expect(ledger.projects[0]).toEqual(JSON.parse(original).projects[0]);expect(ledger.slots).toHaveLength(1);
 }, 30000);

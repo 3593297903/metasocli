@@ -8,7 +8,7 @@ import { fail } from '../core/errors.js';
 import { exists, pathIdentity, safePath, samePath, projectPath } from '../storage/paths.js';
 import { readJson, writeJson } from '../storage/io.js';
 import { canonicalSha256 } from '../storage/canonical.js';
-import { liveLease, serialized, waitLease } from '../storage/locking.js';
+import { liveLease, serialized, waitLease, assertLegacySchedulerIdle } from '../storage/locking.js';
 import { listJobs } from './store.js';
 import { listVideoRetries } from './video-retry.js';
 import { BatchPlan, BatchRun } from '../contracts/batch.js';
@@ -20,7 +20,17 @@ const Ledger = z.object({ schemaVersion: z.literal(1), owner: z.literal('metasoc
 export type LedgerState = z.infer<typeof Ledger>;
 export type SlotRecord = z.infer<typeof Slot>;
 export const terminal = (status: string) => ['generated', 'downloaded', 'failed', 'cancelled'].includes(status);
-export const occupied = (ledger: LedgerState) => ledger.slots.filter(s => !terminal(s.status));
+export const occupied = (ledger: LedgerState) => ledger.slots.filter(s => !terminal(s.status) && (s.status !== 'prepared' || !!s.taskId));
+export const projectOccupied = (root: string, ledger: LedgerState) => occupied(ledger).filter(s => samePath(s.root, root));
+export function capacitySnapshot(root: string, ledger: LedgerState) {
+  const sharedOccupied = occupied(ledger).length, currentProjectOccupied = projectOccupied(root, ledger).length;
+  return { sharedLimit: 4, sharedOccupied, currentProjectOccupied, otherProjectsOccupied: sharedOccupied - currentProjectOccupied,
+    available: Math.max(0, 4 - sharedOccupied), source: 'persisted-ledger' as const, liveCheckPerformed: false };
+}
+export const capacityAvailable = (root: string, ledger: LedgerState, capacity = 4, heldId?: string) => {
+  const held = occupied(ledger).filter(s => s.operationId !== heldId);
+  return held.length < 4 && held.filter(s => samePath(s.root, root)).length < capacity;
+};
 export const unsafeSlots = (ledger: LedgerState) => ledger.slots.filter(s => ['submit_unknown', 'query_unknown'].includes(s.status));
 export interface BatchDispatchBinding {batchId:string;planId?:string;segmentId?:string;requestHash?:string;inputHash?:string}
 /** Explicit batch acknowledgements are bound to the immutable authorized scope. They never release occupied slots. */
@@ -32,11 +42,11 @@ async function acceptedByBatch(root:string,binding:BatchDispatchBinding) {
   if(binding.planId!==undefined&&!plan.items.some(i=>i.planId===binding.planId&&i.segmentId===binding.segmentId&&i.requestHash===binding.requestHash&&i.inputHash===binding.inputHash))fail('BATCH_ACK_SCOPE','Acknowledgement does not cover this immutable request.');
   return run.authorization.acceptedUnknown??[];
 }
-/** Default cross-project unknowns still halt dispatch; an explicit current-batch grant may acknowledge exact identities. */
+/** Only this story's unknowns veto dispatch. All projects' possible requests still occupy shared capacity. */
 export async function blockingSlots(root: string, ledger: LedgerState, runtime?: string,binding?:BatchDispatchBinding) {
   const acknowledged = new Set((await listVideoRetries(root, runtimeDirectory(runtime))).map(a => a.oldOperationId));
   const accepted=binding?await acceptedByBatch(root,binding):[];
-  return unsafeSlots(ledger).filter(s=>{
+  return unsafeSlots(ledger).filter(s=>samePath(s.root,root)).filter(s=>{
     if(s.status!=='submit_unknown'||s.taskId)return true;
     if(samePath(s.root,root)&&acknowledged.has(s.operationId))return false;
     return !accepted.some(a=>samePath(a.root,s.root)&&a.projectId===s.projectId&&a.operationId===s.operationId&&a.requestHash===s.requestHash&&a.inputHash===s.inputHash);
@@ -51,6 +61,7 @@ async function readLedger(runtime: string): Promise<LedgerState> {
   }
   const ledger = parse(Ledger, await readJson(file)), { hash, ...base } = ledger;
   if (canonicalSha256(base) !== hash) fail('COORDINATOR_TAMPERED', 'Shared reservation hash mismatch.');
+  validateIdentities(ledger);
   return ledger;
 }
 /** Read-only inspection for status; no registration, synchronization or capacity release. */
@@ -89,6 +100,11 @@ function normalizeRoots(ledger: LedgerState) {
     operations.add(slot.operationId);
   }
 }
+function validateIdentities(ledger: LedgerState) {
+  normalizeRoots(structuredClone(ledger));
+  const ids = ledger.slots.flatMap(s => s.taskId ? [s.taskId] : []);
+  if (ids.length !== new Set(ids).size) fail('TASK_LINK_CONFLICT', 'Remote task is registered more than once across projects.');
+}
 async function sync(ledger: LedgerState, root: string) {
   normalizeRoots(ledger);
   const story = await loadStory(root), registered = ledger.projects.find(p => samePath(p.root, root));
@@ -97,24 +113,13 @@ async function sync(ledger: LedgerState, root: string) {
     fail('COORDINATOR_CONFLICT', 'This project identity is registered at another root. Restore the original project path before recovery.');
   }
   if (!registered) ledger.projects.push({ root, projectId: story.projectId });
-  for (const project of ledger.projects) {
-    await safePath(project.root);
+  for (const project of ledger.projects.filter(p => samePath(p.root, root))) {
     const slots = ledger.slots.filter(s => samePath(s.root, project.root));
-    if (!await exists(project.root)) {
-      // A hash-verified terminal ledger is sufficient archival evidence, including
-      // v1 records written before retiredAt existed. Empty registration is not proof.
-      // Retain every task ID/hash/status; a marker alone can never release capacity.
-      if (!slots.length || slots.some(s => !terminal(s.status) || (['generated', 'downloaded'].includes(s.status) && !s.taskId))) {
-        fail('COORDINATOR_PROJECT_MISSING', 'A registered project path is missing without complete terminal evidence. Preserve its slots and restore the original directory before creating.');
-      }
-      project.retiredAt ??= new Date().toISOString();
-      continue;
-    }
     delete project.retiredAt; // A restored root must pass the original identity and job checks again.
     if ((await loadStory(project.root)).projectId !== project.projectId) fail('COORDINATOR_CONFLICT', 'Registered story no longer has its original identity.');
     const jobs = await listJobs(project.root);
     for (const slot of slots) {
-      if (!jobs.some(j => j.operationId === slot.operationId)) { slot.status = 'submit_unknown'; continue; }
+      if (!jobs.some(j => j.operationId === slot.operationId) && !terminal(slot.status)) { slot.status = 'submit_unknown'; }
     }
     for (const job of jobs) {
       const i = ledger.slots.findIndex(s => s.operationId === job.operationId);
@@ -122,7 +127,11 @@ async function sync(ledger: LedgerState, root: string) {
         const slot = ledger.slots[i]!;
         if (!samePath(slot.root, project.root) || slot.projectId !== job.projectId || slot.requestHash !== job.requestHash || slot.inputHash !== job.inputHash
           || (slot.taskId && job.taskId && slot.taskId !== job.taskId)) fail('COORDINATOR_CONFLICT', 'Reservation and task identity differ.');
-        ledger.slots[i] = slotFor(project.root, job);
+        // A queued prepared job is not a reservation. An existing reservation must
+        // survive a crash between the ledger save and submitting intent.
+        if (terminal(slot.status) && !terminal(job.status)) continue;
+        ledger.slots[i] = { ...slotFor(project.root, job), ...(slot.taskId ? { taskId: slot.taskId } : {}),
+          ...(job.status === 'prepared' && slot.status !== 'prepared' ? { status: slot.status } : {}) };
       } else if (job.status !== 'prepared') ledger.slots.push(slotFor(project.root, job));
     }
   }
@@ -145,11 +154,16 @@ export async function withCoordinator<T>(root: string, runtime: string, work: (l
 export async function reconcileRuntime(root: string, runtime?: string) {
   return withCoordinator(root, runtimeDirectory(runtime), async ledger => ledger);
 }
-export async function requireScheduler(runtime: string, token?: string) {
-  const scheduler = await liveLease(join(runtime, 'batch.lock'));
-  if (scheduler && scheduler.token !== token) fail('SCHEDULER_BUSY', 'A batch owns this installation scheduler; wait for it or resume its existing tasks.');
+export async function requireScheduler(root: string, runtime: string, token?: string) {
+  await assertLegacySchedulerIdle(await safePath(join(runtime, 'batch.lock')));
+  const scheduler = await liveLease(await projectPath(root, '.metasocli/batch-scheduler.lock'));
+  if (scheduler && scheduler.token !== token) fail('SCHEDULER_BUSY', 'A batch owns this story scheduler; resume its existing tasks or wait for this story.');
   if (token && scheduler?.token !== token) fail('LOCK_LOST', 'Batch scheduler ownership was lost.');
 }
-export async function acquireScheduler(runtime: string, waitMs = 30000) {
-  return waitLease(await safePath(join(runtime, 'batch.lock')), waitMs);
+export async function acquireScheduler(root: string, runtime: string, waitMs = 30000) {
+  await loadStory(root);
+  await assertLegacySchedulerIdle(await safePath(join(runtime, 'batch.lock')));
+  const lease = await waitLease(await projectPath(root, '.metasocli/batch-scheduler.lock'), waitMs);
+  try { await assertLegacySchedulerIdle(await safePath(join(runtime, 'batch.lock'))); return lease; }
+  catch (error) { await lease.release(); throw error; }
 }

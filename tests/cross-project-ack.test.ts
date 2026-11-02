@@ -16,19 +16,19 @@ async function setup() {
  const lost=await submit(old.root,plan.planId,'s1',true,{client:{async create(){throw Error('no complete receipt');},async query(){throw Error('no task ID');}}});
  const current=await batchFixture([7]);return {old,lost,...current};
 }
-it('explicit cross-project acknowledgement keeps the old occupied slot and limits seven new requests to three active tasks',async()=>{
+it('default isolation keeps the old occupied slot and limits seven new requests to three active tasks; legacy acknowledgement is optional',async()=>{
  const f=await setup();let posts=0,peak=0;const active=new Set<string>();let release!:()=>void;
  const barrier=new Promise<void>(r=>{release=r;});
  const client:VideoClient={async create(request){expect(request.context_ir_enabled).toBe(true);const id='new-'+(++posts);active.add(id);peak=Math.max(peak,active.size);expect(occupied(await reconcileRuntime(f.root)).length).toBeLessThanOrEqual(4);if(posts===3)release();if(posts<=3)await barrier;return {taskId:id,evidence};},async query(taskId){active.delete(taskId);return {taskId,status:'generated',rawStatus:'succeeded',duration:7,url:'https://example.com/a.mp4',evidence};}};
  const deps={client,fetcher:async()=>new Response(mp4(7))};
  const args=['batch','run','--root',f.root,'--batch',f.batch.plan.batchId,'--confirm','--poll-ms','0','--max-polls','20'];
- const stopped=await runCli(args,deps);expect(stopped.data).toMatchObject({summary:{pending:7}});expect(posts).toBe(0);
+ const completed=await runCli(args,deps);expect(completed.data).toMatchObject({summary:{reusable:7}});expect(posts).toBe(7);
  const result=await runCli([...args,'--accept-existing-unknown',f.lost.operationId],deps);
  expect(result).toMatchObject({exitCode:0,data:{summary:{reusable:7},run:{status:'complete'}}});
  expect(posts).toBe(7);expect(peak).toBe(3);expect(await readJob(f.old.root,f.lost.operationId)).toMatchObject({status:'submit_unknown',requestHash:f.lost.requestHash});
  expect(occupied(await reconcileRuntime(f.root))).toMatchObject([{operationId:f.lost.operationId,status:'submit_unknown'}]);
  await runCli(['batch','resume','--root',f.root,'--batch',f.batch.plan.batchId,'--poll-ms','0'],deps);expect(posts).toBe(7);
- const other=await batchFixture([1]);expect((await runCli(['batch','run','--root',other.root,'--batch',other.batch.plan.batchId,'--confirm'],deps)).data).toMatchObject({summary:{pending:1}});expect(posts).toBe(7);
+ const other=await batchFixture([1]);expect((await runCli(['batch','run','--root',other.root,'--batch',other.batch.plan.batchId,'--confirm'],deps)).data).toMatchObject({summary:{reusable:1}});expect(posts).toBe(8);
 },120000);
 it('does not allow resume to add an acknowledgement or accept an arbitrary operation ID',async()=>{
  const f=await setup(),client:VideoClient={async create(){throw Error('must not POST');},async query(){throw Error('must not query');}};
@@ -45,7 +45,7 @@ it('a new unknown from the acknowledged batch still stops all unstarted requests
 });
 it('does not permit another immutable plan to borrow the batch acknowledgement, and rejects tampered authorization',async()=>{
  const f=await setup();let posts=0;const client:VideoClient={async create(){return {taskId:'scope-'+(++posts),evidence};},async query(taskId){return {taskId,status:'running',rawStatus:'running',evidence};}};
- await runCli(['batch','run','--root',f.root,'--batch',f.batch.plan.batchId,'--confirm','--accept-existing-unknown',f.lost.operationId,'--max-polls','1','--poll-ms','0'],{client});
+ await runCli(['batch','run','--root',f.root,'--batch',f.batch.plan.batchId,'--confirm','--accept-existing-unknown',f.lost.operationId,'--max-polls','1','--poll-ms','0','--capacity-wait-ms','0'],{client});
  expect(posts).toBe(3);const another=await createPlan(f.root,'ep-z');
  await expect(submit(f.root,another.planId,'s7',true,{client,dispatchBatchId:f.batch.plan.batchId})).rejects.toMatchObject({code:'BATCH_ACK_SCOPE'});expect(posts).toBe(3);
  const file=join(f.root,'.metasocli/batches',f.batch.plan.batchId,'run.json'),run=JSON.parse(await readFile(file,'utf8'));run.authorization.acceptedUnknown[0].requestHash='0'.repeat(64);await writeFile(file,JSON.stringify(run));

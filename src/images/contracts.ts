@@ -58,6 +58,7 @@ export const ImageRun = z.object({ schemaVersion:z.literal(1), planId:z.uuid(), 
   items:z.array(z.object({assetId:Id,operationId:z.uuid().optional(),retryOf:z.uuid().optional()}).strict()),
   unlocks:z.array(z.object({at:z.iso.datetime(),dependency:Id,assets:z.array(Id)}).strict()),
   status:z.enum(['running','complete','needs_attention']),updatedAt:z.iso.datetime(),replacementPlanId:z.uuid().optional(),
+  waiting:z.object({code:z.literal('IMAGE_CAPACITY_WAIT'),reason:z.enum(['concurrent','rpm']),since:z.iso.datetime()}).strict().optional(),
 }).strict();
 export type ImageRunRecord = z.infer<typeof ImageRun>;
 export const resolvedImage = (status:string) => ['registered','reused','rejected','failed','superseded','blocked'].includes(status);

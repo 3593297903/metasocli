@@ -1,29 +1,60 @@
 import { z } from 'zod';
+import { randomUUID } from 'node:crypto';
 import { type Job } from '../contracts/job.js';
 import { parse } from '../contracts/story.js';
 import { type VideoBatchRun } from '../contracts/batch.js';
 import { fail, publicError, isCode } from '../core/errors.js';
+import { loadPlan, validatePlan } from '../core/planning.js';
 import { readJson } from '../storage/io.js';
 import { projectPath, exists, samePath } from '../storage/paths.js';
-import { listJobs } from './store.js';
+import { listJobs, persistence } from './store.js';
 import { submit, type JobDependencies } from './submit.js';
 import { resume } from './resume.js';
 import { ProviderError, CreateDiagnostics } from '../metaso/client.js';
 import { liveLease, withProjectWrite } from '../storage/locking.js';
 import { submissionLeasePath } from './submission-owner.js';
 import { batchStatus, loadBatch, loadBatchRun, saveBatchRun } from './batch-store.js';
-import { acquireScheduler, reconcileRuntime, runtimeDirectory, occupied, blockingSlots } from './coordinator.js';
-import { authorizeVideoRetry, listVideoRetries, materializeRetry, effectiveJobs } from './video-retry.js';
+import { acquireScheduler, requireScheduler, reconcileRuntime, runtimeDirectory, occupied, capacityAvailable, blockingSlots } from './coordinator.js';
+import { authorizeVideoRetry, listVideoRetries, materializeRetry, effectiveJobs, readVideoRetry, supersededRetry } from './video-retry.js';
 import { acquireVideoStage } from '../images/phase.js';
 
 const Options = z.object({ maxPolls: z.number().int().min(1).max(720).default(60), pollIntervalMs: z.number().int().min(0).max(60000).default(5000),
-  schedulerWaitMs: z.number().int().min(0).max(300000).default(30000) }).strict();
-type Event = { kind: 'create'|'query'|'download'; root?: string; order?: number; job?: Job; error?: ReturnType<typeof publicError> };
+  schedulerWaitMs: z.number().int().min(0).max(300000).default(30000),
+  capacityWaitMs: z.number().int().min(0).max(300000).default(30000), capacityPollMs: z.number().int().min(10).max(60000).default(250) }).strict();
+type Event = { kind: 'create'|'query'|'download'; root?: string; projectId?: string; operationId?: string; order?: number; job?: Job; error?: ReturnType<typeof publicError> };
 export interface BatchDependencies extends JobDependencies { retryOperationId?: string; acceptExistingUnknown?: string[]; now?: () => number; onStart?: (summary: Awaited<ReturnType<typeof batchStatus>>['summary']) => void | Promise<void> }
 export async function authorizeBatchRetry(root: string, id: string, old: string, confirmed: boolean, accepted: boolean, deps: Pick<BatchDependencies, 'runtimeRoot'|'checkpoint'> = {}) {
   const plan = await loadBatch(root, id), jobs = await listJobs(root), original = jobs.find(j => j.operationId === old);
   const item = plan.items.find(i => i.episodeId === original?.episodeId && i.segmentId === original.segmentId && i.inputHash === original.inputHash && i.requestHash === original.requestHash);
   if (!item) fail('RETRY_CONFLICT', 'Local operation is not in this batch scope.');
+  if (!accepted && original && ['failed', 'cancelled'].includes(original.status)) {
+    if (!confirmed) fail('GENERATION_NOT_AUTHORIZED', 'A failed-task retry needs current explicit confirmation.');
+    return withProjectWrite(root, async () => {
+      await requireScheduler(root, runtimeDirectory(deps.runtimeRoot));
+      const currentPlan = await loadBatch(root, id), run = await loadBatchRun(root, currentPlan);
+      if (!run || run.authorization.retryOnly) fail('GENERATION_NOT_AUTHORIZED', 'A failed batch retry requires the original full batch authorization; use an explicitly scoped single-segment retry otherwise.');
+      const current = await listJobs(root), matching = effectiveJobs(current).filter(j => j.episodeId === item.episodeId && j.segmentId === item.segmentId);
+      const repeated = matching.find(j => j.retryOf === old);
+      if (repeated) {
+        if (repeated.inputHash !== item.inputHash || repeated.requestHash !== item.requestHash) fail('RETRY_CONFLICT', 'Saved failed retry belongs to another request.');
+        return { job: repeated }; // Even a second failure/unknown does not renew this one-attempt grant.
+      }
+      const latest = matching.at(-1);
+      if (latest?.operationId !== old || !['failed', 'cancelled'].includes(latest.status)) fail('RETRY_FORBIDDEN', 'Only the latest definitively failed or cancelled attempt may be retried.');
+      const previousGrant = await readVideoRetry(root, old, runtimeDirectory(deps.runtimeRoot));
+      if (previousGrant && !await supersededRetry(root, previousGrant)) fail('RETRY_CONFLICT', 'An existing unknown-result retry must be recovered, not replaced.');
+      const source = await loadPlan(root, item.planId); await validatePlan(root, source);
+      const at = new Date().toISOString();
+      const job: Job = { schemaVersion: 1, operationId: randomUUID(), projectId: source.projectId, planId: source.planId, planHash: source.planHash,
+        episodeId: item.episodeId, segmentId: item.segmentId, revision: source.revision, requestHash: item.requestHash, inputHash: item.inputHash,
+        attempt: Math.max(...current.filter(j => j.episodeId === item.episodeId && j.segmentId === item.segmentId).map(j => j.attempt), previousGrant?.attempt ?? 0) + 1,
+        retryOf: old, status: 'prepared', createdAt: at, updatedAt: at };
+      // As with ordinary failed-task retry, the prepared job is its durable new intent.
+      // Saving it precedes dispatch and lets batch resume keep this exact ID after a crash.
+      await persistence.job(root, job); await deps.checkpoint?.('retry-job', job);
+      return { job };
+    });
+  }
   return authorizeVideoRetry(root, item.planId, item.segmentId, old, confirmed, accepted, deps.runtimeRoot, deps.checkpoint);
 }
 async function creationError(root: string, job: Job) {
@@ -33,10 +64,10 @@ async function creationError(root: string, job: Job) {
   if (record.operationId !== job.operationId || record.requestHash !== job.requestHash) fail('RECEIPT_CONFLICT', 'Creation failure record belongs to a different intent.');
   return record;
 }
-/** A single installation scheduler; POST, GET and downloads are separate asynchronous queues. */
+/** Story-local scheduler; only atomic reservations share installation-wide capacity. */
 export async function runBatch(root: string, id: string, authorize: boolean, deps: BatchDependencies, input: Partial<z.infer<typeof Options>> = {}) {
   const options = parse(Options, input), plan = await loadBatch(root, id), runtime = runtimeDirectory(deps.runtimeRoot);
-  const scheduler = await acquireScheduler(runtime, options.schedulerWaitMs);
+  const scheduler = await acquireScheduler(root, runtime, options.schedulerWaitMs);
   let videoStage: Awaited<ReturnType<typeof acquireVideoStage>> | undefined;
   const now = deps.now ?? Date.now, sleep = deps.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const creates = new Map<number, Promise<void>>(), queries = new Map<string, Promise<void>>(), downloads = new Map<number, Promise<void>>();
@@ -84,6 +115,7 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
     const createdThisRun = new Set<string>();
     const events: Event[] = [];
     let halt = imageStagePaused, dispatchPaused = false;
+    let capacityWaitStarted: number | undefined;
     const taskDeps = { ...deps, runtimeRoot: runtime, schedulerToken: scheduler.token, capacity: plan.concurrency, dispatchBatchId:id, client: {
       prepare: deps.client.prepare?.bind(deps.client),
       create: deps.client.create.bind(deps.client),
@@ -121,7 +153,8 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
             await deps.checkpoint?.('retry-batch-index', event.job);
           }
         }
-        if (event.job?.lastError && event.kind === 'query' && event.job.evidencePath) {
+        if (event.job?.lastError && event.kind === 'query' && event.root && samePath(event.root, root)
+          && event.projectId === plan.projectId && event.job.evidencePath) {
           const evidence = await readJson(await projectPath(event.root ?? root, event.job.evidencePath)) as { httpStatus?: number };
           if ([401,402,403].includes(evidence.httpStatus ?? 0)) { halt = true; trace('account-halt', undefined, event.job); }
         }
@@ -148,6 +181,7 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
         }
         if (!failure.safeToRetry || failure.httpStatus !== 429) continue;
         if (retryAuthorizations.some(a => a.newOperationId === job.operationId)) continue; // This authorization buys exactly one POST, even for 429.
+        if (job.retryOf && !item.retryHistory.includes(job.retryOf)) continue; // Explicit failed-task retries also buy exactly one POST.
         if (item.retryHistory.includes(job.operationId)) continue;
         const wait = Math.max(250 * 2 ** item.retryHistory.length, failure.retryAfterMs);
         if (item.retryHistory.length >= plan.retryPolicy.max429RetriesPerItem || state.rateLimit.spentWaitMs + wait > plan.retryPolicy.totalWaitBudgetMs) {
@@ -167,7 +201,7 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
           const job = selected[item.order], index = state.items[item.order]!;
           if (state.authorization.retryOnly && (!job || !state.authorization.retryOnly.includes(job.operationId))) continue;
           if (creates.has(item.order) || index.error || (job && job.status !== 'prepared' && !(job.status === 'failed' && index.retryOf === job.operationId))) continue;
-          if (occupied(ledger).length >= plan.concurrency && !(job?.status === 'prepared' && ledger.slots.some(s => s.operationId === job.operationId))) break;
+          if (!capacityAvailable(root, ledger, plan.concurrency, job?.status === 'prepared' ? job.operationId : undefined)) break;
           trace('dispatch', item.order, job, undefined, occupied(ledger).length);
           await saveBatchRun(root, state);
           let entered!: () => void;
@@ -200,9 +234,10 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
           if (dispatchPaused || halt || (await blockingSlots(root, ledger, runtime,{batchId:id})).length || events.length) break;
         }
       }
-      // Query all registered accepted tasks, including older tasks occupying shared slots.
+      // Only this story owns its GETs. Foreign snapshots are refreshed by that
+      // story's run/resume/register, never by following another story's files or errors.
       let nextWake = Infinity;
-      for (const slot of occupied(ledger)) {
+      for (const slot of occupied(ledger).filter(s => samePath(s.root, root) && s.projectId === plan.projectId)) {
         if (!slot.taskId || slot.status === 'prepared' || slot.status === 'reserved' || slot.status === 'submit_unknown') continue;
         // Receipt persistence can make an ID visible before its creating process finishes
         // the queued/evidence checkpoint. Do not spend a query budget on that partial snapshot.
@@ -215,8 +250,8 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
         polls.set(key, (polls.get(key) ?? 0) + 1);
         const order = samePath(slot.root, root) ? selected.findIndex(j => j?.operationId === key) : -1;
         const work = resume(slot.root, key, taskDeps, { maxPolls: 1, download: false, observeOnly: true })
-          .then(job => { events.push({ kind: 'query', root: slot.root, ...(order < 0 ? {} : { order }), job }); },
-            error => { events.push({ kind: 'query', ...(order < 0 ? {} : { order }), error: publicError(error) }); })
+          .then(job => { events.push({ kind: 'query', root: slot.root, projectId: slot.projectId, operationId: key, ...(order < 0 ? {} : { order }), job }); },
+            error => { events.push({ kind: 'query', root: slot.root, projectId: slot.projectId, operationId: key, ...(order < 0 ? {} : { order }), error: publicError(error) }); })
           .finally(() => { queries.delete(key); nextQuery.set(key, now() + options.pollIntervalMs); });
         queries.set(key, work);
       }
@@ -234,13 +269,23 @@ export async function runBatch(root: string, id: string, authorize: boolean, dep
       await saveBatchRun(root, state);
       if (events.length) continue;
       const running = [...creates.values(), ...queries.values(), ...downloads.values()];
-      const pending = plan.items.some(i => !state.items[i.order]!.error && (!selected[i.order] || selected[i.order]!.status === 'prepared' || (selected[i.order]!.status === 'failed' && state.items[i.order]!.retryOf === selected[i.order]!.operationId)));
+      const pending = plan.items.some(i => (!state.authorization.retryOnly || (selected[i.order] && state.authorization.retryOnly.includes(selected[i.order]!.operationId)))
+        && !state.items[i.order]!.error && (!selected[i.order] || selected[i.order]!.status === 'prepared' || (selected[i.order]!.status === 'failed' && state.items[i.order]!.retryOf === selected[i.order]!.operationId)));
       if (pending && !blocked && state.rateLimit.notBefore > now()) nextWake = Math.min(nextWake, state.rateLimit.notBefore);
+      // Foreign capacity can change even when this story has no queryable task.
+      // This invocation has a bounded wait; the saved run/IDs remain resumable.
+      if (pending && !blocked && occupied(ledger).length >= 4
+        && occupied(ledger).some(s => !samePath(s.root, root))) {
+        if (capacityWaitStarted === undefined) { capacityWaitStarted = now(); trace('waiting-shared-capacity', undefined, undefined, 'Other projects retain possible slots; authorization remains pending.', occupied(ledger).length); }
+        const remaining = options.capacityWaitMs - (now() - capacityWaitStarted);
+        if (remaining > 0) nextWake = Math.min(nextWake, now() + Math.min(options.capacityPollMs, remaining));
+        else trace('capacity-wait-budget-ended', undefined, undefined, 'Resume this saved batch to continue waiting; no request was rejected.', occupied(ledger).length);
+      }
       if (!running.length && nextWake === Infinity) {
         // A just-freed slot or a newly indexed generated result needs one more loop.
         const refresh = effectiveJobs(await listJobs(root));
         if (refresh.some(j => !jobs.some(old => old.operationId === j.operationId && old.updatedAt === j.updatedAt && old.status === j.status))) continue;
-        if (occupied(ledger).length >= plan.concurrency && !occupied(ledger).some(s => s.taskId)) trace('waiting-capacity-no-queryable-tasks', undefined, undefined, 'Possible occupied capacity is full; no queryable tasks. Authorization retained.', occupied(ledger).length);
+        if (!capacityAvailable(root, ledger, plan.concurrency) && !occupied(ledger).some(s => s.taskId)) trace('waiting-capacity-no-queryable-tasks', undefined, undefined, 'Possible occupied capacity is full; no queryable tasks. Authorization retained.', occupied(ledger).length);
         break;
       }
       const timer = nextWake === Infinity ? undefined : sleep(Math.max(0, nextWake - now()));

@@ -1,5 +1,7 @@
 # metasocli 独立项目方案
 
+2026-11-02：已实现 [项目隔离与冷切换](PROJECT_ISOLATION.md)。图片/视频运行锁在故事内，共享协调锁只做短事务；只同步及查询当前故事，外部快照保留。外部未知占容量但不全面否决空位；视频全机合计4与项目 concurrency 分开核验，容量有界等待。共享哈希、UUID/根与操作/任务身份冲突继续拒绝，旧任务恢复不改请求。旧全局运行锁只用于冷升级检查，不支持新旧二进制热混跑。
+
 2026-09-21 批次实施补充：新增不可变批次、授权运行索引和安装级共享生成预留，默认4个生成占位持续补位、2个独立下载。单段视频生命周期拆为短状态写锁与锁外 HTTP；按共享协调锁→项目写锁顺序，用提交归属 token 区分活跃 submitting 和失联 unknown。terminal Job 持久化后才释放名额，batch resume 可在原授权范围内补交，旧 resume 永不 POST。Plan/Story/Job 原格式及 H3、时长、图片、旁白构造保持兼容。详见 [批次命令](../README.md#四并发持续补位) 和 [实施报告](VIDEO_BATCH_CONCURRENCY_IMPLEMENTATION_REPORT.md)；下文串行/长锁描述属于早期设计。
 
 2026-09-21 当前默认改为 [视频请求内启用 Context IR](INLINE_CONTEXT_IR_WORKFLOW.md)：新计划使用 `h3-inline-ir / inline-video`，实际视频 JSON 显式发送 `context_ir_enabled:true`，不先执行独立 IR。CLI 在联网前拒绝 false 计划创建视频；已有任务按原 ID 恢复。下文 2026-09-19 的两阶段设计作为历史兼容记录保留。
@@ -174,6 +176,6 @@ CLI 退出后本地轮询会停止，远端已经接受的任务可能继续运�
 
 新增 src/images 的契约、计划、凭据、HTTP、流式接收、协调、登记和恢复模块，详见 [实际用法](IMAGE_API_USAGE.md)。图片计划冻结资产配方/原提示词文件哈希、原目标哈希、有序依赖及 profile；不依赖全局 revision 相等，保留旧 Story/Recipe/视频 Plan/Job 哈希语义。待生成的上游冻结生产身份，真正发送 edits 前解析已登记图片哈希。
 
-图片 quotaGroup 的 scheduler 控制单个活动运行进程，ledger 记录每个请求，进程内不限制 ready 生成数。共享图片账本锁在项目短写锁之前；不同时持有图片和视频协调锁。登记条件在 registerAsset 的同一项目短事务内检查；网络不持项目锁，下载2、解码2、登记1。项目 image-stage.json 持久化阶段，未知请求不因进程死亡解除；视频批次持有 video-stage.lock，新视频提交同锁内检查图片阶段，原 task_id 的查询下载不受影响。
+故事本地 image-scheduler 控制同故事单个活动运行进程，quotaGroup ledger 保留各故事请求快照。默认不限制 ready 生成数；确有配置的 concurrent/RPM 在共享短事务内核验，额度不足保存未提交等待，batch 限制仍按请求范围解释。共享图片账本锁在项目短写锁之前；不同时持有图片和视频协调锁。登记条件在 registerAsset 的同一项目短事务内检查；网络不持项目锁，下载2、解码2、登记1。项目 image-stage.json 持久化阶段，未知请求不因进程死亡解除；视频批次持有 video-stage.lock，新视频提交同锁内检查图片阶段，原 task_id 的查询下载不受影响。
 
 先保存 prepared，再逐项保存 submitting 后立即调用 HTTP，不能把预留冒充已发送。响应体立即按 operationId 流式落盘，complete.json 绑定请求、字节数和哈希，再进入有界解析队列。同步 API 没有任务查询契约；未知结果保留、禁止自动重试。完整原响应/URL/下载可恢复，用户换图后的旧输出保留 superseded，原文件不被覆盖。手动结果关联和解除未知必须保存请求绑定证据与明确确认，标识为用户提供的事实，不能冒充服务端独立认证。

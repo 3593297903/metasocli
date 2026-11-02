@@ -16,13 +16,13 @@ import type { Fetch } from '../metaso/transport.js';
 import { type ImageClient } from './client.js';
 import { resolvedImage, type ImagePlanRecord, type ImageJobRecord, type ImageRunRecord } from './contracts.js';
 import { imagePath, readImagePlan, readImageJob, listImageJobs, readImageRun, saveImageRun, saveImageJob, receiptFile, readBodyReceipt } from './store.js';
-import { assertKnownCapacity, acquireImageScheduler, reconcileImageLedger, withImageLedger, imageSlot, updateImageSlot } from './coordinator.js';
+import { assertKnownCapacity, assertImageProject, imageCapacityWait, acquireImageScheduler, reconcileImageLedger, withImageLedger, imageSlot, updateImageSlot } from './coordinator.js';
 import { startImageStage, finishImageStage } from './phase.js';
 import { effectiveImageInput, validateImagePlan } from './planning.js';
 import { DiskBudget, Semaphore, preflightSpace } from './stream.js';
 import { saveImageResponse, receiveImage, downloadImageResult, registerImageResult, saveResultBytes, type ImageCheckpoint, type ResultContext } from './result.js';
 
-export interface ImageDependencies {client?:ImageClient;fetcher?:Fetch;runtimeRoot?:string;checkpoint?:ImageCheckpoint;onResponseChunk?:(operationId:string,bytes:number)=>void;acceptExistingUnknown?:string[]}
+export interface ImageDependencies {client?:ImageClient;fetcher?:Fetch;runtimeRoot?:string;checkpoint?:ImageCheckpoint;onResponseChunk?:(operationId:string,bytes:number)=>void;acceptExistingUnknown?:string[];capacityWaitMs?:number;capacityPollMs?:number;now?:()=>number;sleep?:(ms:number)=>Promise<void>}
 const now=()=>new Date().toISOString();
 const receiverPath=(root:string,id:string)=>projectPath(root,receiptFile(id,'receiver.lock'));
 function context(plan:ImagePlanRecord,deps:ImageDependencies,used=0):ResultContext {return {budget:new DiskBudget(plan.profile.maxTempBytes,used),decode:new Semaphore(plan.profile.decodeConcurrency),download:new Semaphore(plan.profile.downloadConcurrency),registration:new Semaphore(1),...deps};}
@@ -51,7 +51,9 @@ const neverSubmittedImage=(job:ImageJobRecord)=>!job.input&&!job.inputHash&&!job
 /** Only this function can dispatch image POSTs; receivers and result recovery have no create calls. */
 export async function runImages(root:string,id:string,authorize:boolean,deps:ImageDependencies={},retryOf?:string,acceptUnknownResult=false){
   const plan=await readImagePlan(root,id),profile=plan.profile;
-  const scheduler=await acquireImageScheduler(profile,deps.runtimeRoot),inFlight=new Map<string,Promise<void>>();
+  const waiting=parse(z.object({budget:z.number().int().min(0).max(300000),interval:z.number().int().min(10).max(60000)}),{budget:deps.capacityWaitMs??30000,interval:deps.capacityPollMs??250});
+  const clock=deps.now??Date.now,sleep=deps.sleep??(ms=>new Promise<void>(r=>setTimeout(r,ms)));let capacitySince:number|undefined;
+  const scheduler=await acquireImageScheduler(root,profile,deps.runtimeRoot),inFlight=new Map<string,Promise<void>>();
   let run:ImageRunRecord|undefined;
   const jobs:ImageJobRecord[]=[];let halt=false,completionVersion=0;
   try {
@@ -59,7 +61,7 @@ export async function runImages(root:string,id:string,authorize:boolean,deps:Ima
     run=await readImageRun(root,plan);if(run?.replacementPlanId)fail('IMAGE_PLAN_REPLACED','This plan has one saved successor; resume the successor rather than generating obsolete inputs.');if(!run&&!authorize)fail('IMAGE_NOT_AUTHORIZED','images resume requires this exact saved authorization and may submit its unstarted items.');
     await validateImagePlan(root,plan);
     if(plan.items.some(i=>i.action==='blocked'))fail('IMAGE_PLAN_BLOCKED','Resolve the blocked specifications/assets before any image POST.');
-    const ledger=await reconcileImageLedger(profile,deps.runtimeRoot);
+    const ledger=await reconcileImageLedger(root,profile,deps.runtimeRoot);
     const existing=await listImageJobs(root);
     const restartPlan=plan.restartOf?await readImagePlan(root,plan.restartOf):undefined;
     const restartAncestors=new Set<string>();
@@ -103,7 +105,7 @@ export async function runImages(root:string,id:string,authorize:boolean,deps:Ima
           assetId:slot.assetId,fingerprint:slot.fingerprint,requestHash:slot.requestHash});
       }
     }
-    const unacceptedUnknown=(slot:typeof ledger.slots[number])=>slot.status==='submit_unknown'
+    const unacceptedUnknown=(slot:typeof ledger.slots[number])=>samePath(slot.root,root)&&slot.projectId===plan.projectId&&slot.status==='submit_unknown'
       &&!acceptedUnknown.some(a=>slot.projectId===plan.projectId&&slot.operationId===a.operationId&&slot.requestHash===a.requestHash)
       &&!acceptedExistingUnknown.some(a=>sameAcknowledgement(a,slot));
     halt=ledger.slots.some(unacceptedUnknown);
@@ -118,11 +120,13 @@ export async function runImages(root:string,id:string,authorize:boolean,deps:Ima
     if(!run){run={schemaVersion:1,planId:id,planHash:plan.planHash,hash:'0'.repeat(64),authorization:{planHash:plan.planHash,provider:profile.provider,quotaGroup:profile.quotaGroup,maxRequests:plan.items.filter(i=>i.action==='generate').length,authorizedAt:now(),...(acceptedUnknown.length?{acceptedUnknown}:{})},
       items:plan.items.map(i=>({assetId:i.assetId,...(i.action==='generate'?{operationId:randomUUID()}:i.operationId?{operationId:i.operationId}:{}),...(i.retryOf?{retryOf:i.retryOf}:{})})),unlocks:[],status:'running',updatedAt:now()};}
     const state=run;
+    delete state.waiting;
     if(acceptedExistingUnknown.length)state.authorization.acceptedExistingUnknown=acceptedExistingUnknown;
     if(retry){const row=state.items.find(i=>i.assetId===retry.assetId)!;if(row.retryOf!==retry.operationId||!row.operationId)row.operationId=randomUUID();row.retryOf=retry.operationId;
       await writeJson(await projectPath(root,receiptFile(row.operationId,'retry-authorization.json')),{retryOf,planHash:plan.planHash,assetId:retry.assetId,confirmedAt:now(),maxRequests:1});}
     await withImageLedger(profile,deps.runtimeRoot,async(shared,save)=>withProjectWrite(root,async()=>{
       const story=await validateImagePlan(root,plan);
+      assertImageProject(shared,root,plan.projectId);
       if((await listJobs(root)).some(j=>['prepared','submitting','submit_unknown'].includes(j.status)))fail('VIDEO_STAGE_ACTIVE','Video submission intent is unresolved; recover it before image preparation.');
       if(restartPlan&&restartRun){
         restartRun.replacementPlanId=id;await saveImageRun(root,restartRun);
@@ -173,7 +177,7 @@ export async function runImages(root:string,id:string,authorize:boolean,deps:Ima
           if(!reservedHere||!['prepared','waiting_dependency'].includes(job.status)
             ||job.input||job.inputHash||job.requestHash||job.requestStartedAt||job.responseHeadersAt||job.responseSavedAt||job.receiptSavedAt||job.downloadCompletedAt||job.registeredAt||job.result||job.resolutionPath||job.recoveredManually)
             fail('IMAGE_LEDGER_CONFLICT','Missing image ledger entry is not an unsubmitted authorized reservation; preserve submission evidence.');
-          shared.slots.push(imageSlot(root,job));
+          shared.slots.push({...imageSlot(root,job),...(profile.providerLimits?{limits:profile.providerLimits}:{})});
         }
         jobs.push(job);
       }
@@ -190,7 +194,7 @@ export async function runImages(root:string,id:string,authorize:boolean,deps:Ima
     };
     for(const job of jobs)if(!['prepared','waiting_dependency','rejected','failed','blocked','superseded','reused'].includes(job.status))startRecovery(job);
     const dispatched=new Set<string>();
-    for(;;){const scanVersion=completionVersion;await scheduler.assertOwned();
+    for(;;){const scanVersion=completionVersion;await scheduler.assertOwned();let capacityBlocked=false;
       if(!halt)for(const job of jobs){if(halt)break;if(!['prepared','waiting_dependency'].includes(job.status)||dispatched.has(job.operationId)|| (retry&&job.assetId!==retry.assetId))continue;
         const item=plan.items.find(i=>i.assetId===job.assetId)!;let lease:Awaited<ReturnType<typeof acquireLease>>|undefined;
         try {
@@ -200,9 +204,12 @@ export async function runImages(root:string,id:string,authorize:boolean,deps:Ima
             if(halt||shared.slots.some(unacceptedUnknown)){halt=true;return false;}
             const slot=shared.slots.find(s=>s.operationId===job.operationId);
             if(!slot)fail('IMAGE_LEDGER_CONFLICT','Image reservation must be in the ledger before submission intent.');
+            const reason=imageCapacityWait(shared,profile,clock());
+            if(reason){capacityBlocked=true;capacitySince??=clock();state.waiting={code:'IMAGE_CAPACITY_WAIT',reason,since:new Date(capacitySince).toISOString()};return false;}
+            delete state.waiting;
             lease=await acquireLease(await receiverPath(root,job.operationId));
             job.input=input;job.requestHash=canonicalSha256(input);job.inputHash=canonicalSha256({fingerprint:job.fingerprint,input});job.status='submitting';job.requestStartedAt=now();
-            await saveImageJob(root,job);Object.assign(slot,imageSlot(slot.root,job));await save();return true;
+            await saveImageJob(root,job);Object.assign(slot,imageSlot(slot.root,job),...(profile.providerLimits?[{limits:profile.providerLimits}]:[]));await save();return true;
           }));
           if(!ready)continue;dispatched.add(job.operationId);
           for(const dep of item.dependencySources.filter(d=>!d.hash))state.unlocks.push({at:now(),dependency:dep.assetId,assets:[job.assetId]});
@@ -213,6 +220,7 @@ export async function runImages(root:string,id:string,authorize:boolean,deps:Ima
             const response=await deps.client!.create(root,job.input!,profile);
             if([401,402,403,429].includes(response.status)||response.status>=500)halt=true;
             await saveImageResponse(root,job,response,profile,ctx);await receiveImage(root,job,profile,ctx);
+            await updateImageSlot(root,job,profile,deps.runtimeRoot);
             if(job.status==='received')await downloadImageResult(root,job,profile,ctx);
             if(job.status==='downloaded')await registerImageResult(root,job,plan,ctx);
           }catch(error){halt=true;captureFailure(job,error);await saveImageJob(root,job);}finally{try{await updateImageSlot(root,job,profile,deps.runtimeRoot);}finally{await owner.release();}}})();
@@ -222,6 +230,8 @@ export async function runImages(root:string,id:string,authorize:boolean,deps:Ima
       // A dependency may have settled and removed its Promise while this scan awaited local I/O.
       // Re-scan that progress before waiting on unrelated work or deciding there is nothing left.
       if(completionVersion!==scanVersion)continue;
+      if(capacityBlocked&&!halt){await saveImageRun(root,state);const remaining=waiting.budget-(clock()-(capacitySince??clock()));
+        if(remaining>0){await Promise.race([...inFlight.values(),sleep(Math.min(waiting.interval,remaining))]);continue;}}
       if(!inFlight.size)break;await Promise.race(inFlight.values());
     }
     await Promise.allSettled(inFlight.values());

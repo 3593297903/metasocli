@@ -48,7 +48,7 @@ it('keeps a new 502 unknown and never reuses the previous authorization for anot
  await runImages(f.root,next.planId,false,deps);await runImages(f.root,next.planId,true,deps,undefined,true);expect(calls).toBe(2);
  expect((await listImageJobs(f.root)).filter(j=>j.status==='submit_unknown')).toHaveLength(2);
 });
-it('an unrelated project unknown continues to stop new POSTs',async()=>{
+it('an unrelated project unknown retains its slot but does not stop an authorized local successor',async()=>{
  const f=await imageFixture(),g=await imageFixture(),runtimeRoot=join(dirname(f.root),'runtime');let calls=0;
  const fail={runtimeRoot,client:{async create(){calls++;return new Response('gateway',{status:502});}}};
  const first=(await plan(f.root)).plan;await runImages(f.root,first.planId,true,fail);
@@ -57,7 +57,7 @@ it('an unrelated project unknown continues to stop new POSTs',async()=>{
  const {recoverImage}=await import('../src/images/run.js');await recoverImage(g.root,(await listImageJobs(g.root))[0]!.operationId,{runtimeRoot});
  const next=(await plan(f.root,first.planId)).plan;const before=calls;
  await runImages(f.root,next.planId,true,{runtimeRoot,client:{async create(){calls++;return imageResponse();}}},undefined,true);
- expect(calls).toBe(before);
+ expect(calls).toBe(before+1);expect((await listImageJobs(g.root))[0]!.status).toBe('submit_unknown');
 });
 it('public CLI exposes offline restart planning and requires explicit unknown acceptance',async()=>{
  const f=await imageFixture(),runtimeRoot=join(dirname(f.root),'runtime');

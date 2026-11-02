@@ -8,7 +8,7 @@ import { ProviderError, type VideoClient, type Submission } from '../metaso/clie
 import type { Fetch } from '../metaso/transport.js';
 import { listJobs, readJob, persistence, saveEvidence, type Persistence } from './store.js';
 import { assertTaskIdAvailable, checkSubmissionConflicts, operationKind, verifyRemoteAssets } from './submission-guard.js';
-import { occupied, blockingSlots, runtimeDirectory, withCoordinator, reconcileRuntime, requireScheduler, slotFor } from './coordinator.js';
+import { capacityAvailable, blockingSlots, runtimeDirectory, withCoordinator, reconcileRuntime, requireScheduler, slotFor } from './coordinator.js';
 import { authorizeVideoRetry, effectiveJobs, listVideoRetries, materializeRetry, readVideoRetry, supersededRetry } from './video-retry.js';
 import { saveSubmissionOwner, submissionLeasePath } from './submission-owner.js';
 import { projectPath } from '../storage/paths.js';
@@ -85,7 +85,7 @@ export async function submit(root: string, planId: string, segmentId: string, au
   let owner: Lease | undefined;
   try {
     const prepared = await withCoordinator(root, runtime, async (ledger, save) => withProjectWrite(root, async () => {
-      await requireScheduler(runtime, deps.schedulerToken);
+      await requireScheduler(root, runtime, deps.schedulerToken);
       for (const a of applicable) {
         const target = await materializeRetry(root, a);
         // Recovered active A still supersedes an unstarted B. A terminal A can
@@ -105,12 +105,15 @@ export async function submit(root: string, planId: string, segmentId: string, au
       }
       const acknowledgements = await listVideoRetries(root, runtime);
       await checkSubmissionConflicts(root, plan.episodeId, segmentId, undefined, new Set(acknowledgements.map(a => a.oldOperationId)));
-      if ((await blockingSlots(root, ledger, runtime,deps.dispatchBatchId?{batchId:deps.dispatchBatchId,planId,segmentId,requestHash:segment.requestHash,inputHash:segment.inputHash}:undefined)).length) fail('SUBMIT_UNKNOWN', 'Shared capacity contains an unacknowledged unknown task; recover it before creating.');
+      if ((await blockingSlots(root, ledger, runtime,deps.dispatchBatchId?{batchId:deps.dispatchBatchId,planId,segmentId,requestHash:segment.requestHash,inputHash:segment.inputHash}:undefined)).length) fail('SUBMIT_UNKNOWN', 'This story contains an unacknowledged unknown task; recover it before creating.');
       const previous = selected.previous;
       const held = previous?.status === 'prepared' ? ledger.slots.find(s => s.operationId === previous.operationId) : undefined;
+      if (held && (held.taskId || !['prepared', 'reserved'].includes(held.status))) {
+        fail('COORDINATOR_CONFLICT', 'A prepared job conflicts with previously accepted or resolved ledger evidence; recover the original task, never resend it.');
+      }
       const capacity = deps.capacity ?? 4;
       if (!Number.isInteger(capacity) || capacity < 1 || capacity > 4) fail('CAPACITY_INVALID', 'Video capacity must be 1–4.');
-      if (occupied(ledger).length - (held ? 1 : 0) >= capacity) {
+      if (!capacityAvailable(root, ledger, capacity, held?.operationId)) {
         if (previous?.status === 'prepared' && acknowledgements.some(a => a.newOperationId === previous.operationId)) return { job: previous };
         fail('CAPACITY_FULL', 'Remote video slots are occupied; query existing tasks first.');
       }

@@ -4,9 +4,10 @@ import { batchFixture, evidence } from './batch-helpers.js';
 import { createPlan } from '../src/core/planning.js';
 import { submit } from '../src/jobs/submit.js';
 import { listJobs, readJob } from '../src/jobs/store.js';
-import { occupied, reconcileRuntime } from '../src/jobs/coordinator.js';
+import { acquireScheduler, occupied, reconcileRuntime, runtimeDirectory } from '../src/jobs/coordinator.js';
 import { runCli } from '../src/cli/main.js';
 import { authorizeBatchRetry } from '../src/jobs/batch.js';
+import { createBatchPlan } from '../src/jobs/batch-store.js';
 import { ProviderError, type VideoClient } from '../src/metaso/client.js';
 
 afterEach(cleanup);
@@ -50,4 +51,22 @@ it('refuses a failed-task retry without current confirmation and does not send a
  const f=await setup(1);f.setMode('success');
  const result=await runCli(f.args.filter(v=>v!=='--confirm'),f.deps);
  expect(result).toMatchObject({exitCode:2,data:{error:{code:'GENERATION_NOT_AUTHORIZED'}}});expect(f.posts).toBe(1);
+},60000);
+
+it('a failed batch retry keeps one prepared identity across concurrent authorization and a preparation checkpoint crash',async()=>{
+ const f=await setup(1);f.setMode('success');
+ await expect(authorizeBatchRetry(f.root,f.batch.plan.batchId,f.failed.operationId,true,false,{checkpoint:async point=>{if(point==='retry-job')throw Error('prepared checkpoint');}})).rejects.toThrow('prepared checkpoint');
+ const child=(await listJobs(f.root)).find(j=>j.retryOf===f.failed.operationId)!;expect(child.status).toBe('prepared');expect(f.posts).toBe(1);
+ const pair=await Promise.all([authorizeBatchRetry(f.root,f.batch.plan.batchId,f.failed.operationId,true,false),authorizeBatchRetry(f.root,f.batch.plan.batchId,f.failed.operationId,true,false)]);
+ expect(pair.map(r=>r.job.operationId)).toEqual([child.operationId,child.operationId]);
+ await runCli(['batch','resume','--root',f.root,'--batch',f.batch.plan.batchId,'--poll-ms','0'],f.deps);
+ expect(f.posts).toBe(2);expect(await readJob(f.root,child.operationId)).toMatchObject({attempt:child.attempt,taskId:'after-topup-2'});
+},60000);
+it('failed retry preparation obeys the same-story scheduler and does not authorize an unstarted replacement batch',async()=>{
+ const f=await setup(1),lock=await acquireScheduler(f.root,runtimeDirectory());
+ try{await expect(authorizeBatchRetry(f.root,f.batch.plan.batchId,f.failed.operationId,true,false)).rejects.toMatchObject({code:'SCHEDULER_BUSY'});}
+ finally{await lock.release();}
+ const next=(await createBatchPlan(f.root,{episodes:f.episodeIds})).plan;
+ await expect(authorizeBatchRetry(f.root,next.batchId,f.failed.operationId,true,false)).rejects.toMatchObject({code:'GENERATION_NOT_AUTHORIZED'});
+ expect((await listJobs(f.root)).filter(j=>j.retryOf===f.failed.operationId)).toHaveLength(0);expect(f.posts).toBe(1);
 },60000);

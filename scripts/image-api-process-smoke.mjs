@@ -17,7 +17,7 @@ function png(){function chunk(name,data){const body=Buffer.concat([Buffer.from(n
 const pause=async(point)=>{process.send?.({checkpoint:point});await new Promise(()=>{setInterval(()=>{},1000);});};
 if(process.argv[2]==='worker'){
   const [, , ,root,id,point,runtime]=process.argv;
-  if(point==='owner'){const lease=await acquireImageScheduler(profile,runtime);await pause(point);await lease.release();}
+  if(point==='owner'){const lease=await acquireImageScheduler(root,profile,runtime);await pause(point);await lease.release();}
   else await runImages(root,id,true,{runtimeRoot:runtime,client:{async create(){await appendFile(join(root,'posts.txt'),'POST\n');if(point==='post')await pause(point);
     if(point==='partial-response')return new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('{"data":['));}}));
     return new Response(JSON.stringify({data:[{url:'https://offline.example/image.png'}]}));}},
@@ -62,9 +62,9 @@ if(process.argv[2]==='worker'){
       evidence.push({point,before,ledgerBefore:0,reserved:original.items,recovered:recovered.map(({assetId,operationId,attempt,status})=>({assetId,operationId,attempt,status})),posts,resumeExtraPosts:0});
       console.log('PASS SIGKILL partial-prepared: two reserved IDs retained, 0 historical POST, 1 first POST per asset, 0 repeat POST');
     }
-    const runtime=join(base,'contention'),{child,exit}=await worker(base,'unused','owner',runtime);
-    try{await assert.rejects(acquireImageScheduler(profile,runtime),{code:'LOCK_BUSY'});}finally{child.kill('SIGKILL');await exit;}
-    const owner=await acquireImageScheduler(profile,runtime);await owner.release();evidence.push({point:'two-process-quota',contender:'LOCK_BUSY',deadOwnerReclaimed:true});console.log('PASS two-process quota ownership; dead process recovered without dropping unresolved records');
+    const runtime=join(base,'contention'),ownerRoot=join(base,'owner-story');await initializeStory(ownerRoot,'owner');const {child,exit}=await worker(ownerRoot,'unused','owner',runtime);
+    try{await assert.rejects(acquireImageScheduler(ownerRoot,profile,runtime),{code:'LOCK_BUSY'});}finally{child.kill('SIGKILL');await exit;}
+    const owner=await acquireImageScheduler(ownerRoot,profile,runtime);await owner.release();evidence.push({point:'two-process-story',contender:'LOCK_BUSY',deadOwnerReclaimed:true});console.log('PASS two-process story ownership; dead process recovered without dropping unresolved records');
     await writeFile(join(packageRoot,'.work/image-api-20260924/process-evidence.json'),JSON.stringify({offline:true,cases:evidence},null,2));
   }finally{const actual=await realpath(base),parent=await realpath(temp),rel=relative(parent,actual);if(isAbsolute(rel)||rel.startsWith('..')||!rel.startsWith('image-process-'))throw Error('Unsafe cleanup');await rm(actual,{recursive:true,force:true});}
 }

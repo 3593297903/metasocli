@@ -101,6 +101,14 @@ export async function waitLease(file: string, waitMs = 10000): Promise<Lease> {
     await new Promise(resolve => setTimeout(resolve, 25));
   }
 }
+/** Cold upgrade gate only. New schedulers never hold an installation-wide run lock. */
+export async function assertLegacySchedulerIdle(file: string) {
+  if (await exists(`${file}.recovery`)) fail('LOCK_UNKNOWN', 'Legacy scheduler recovery is unresolved; preserve it before switching versions.');
+  if (!await exists(file)) return;
+  if (await liveLease(file)) fail('LEGACY_SCHEDULER_BUSY', 'An older scheduler is active or its owner cannot be disproved. Finish it before a cold version switch.');
+  const stale = await acquireLease(file); // Existing dead-PID, same-host recovery protocol.
+  await stale.release();
+}
 export function withProjectWrite<T>(root: string, work: (assertOwned: () => Promise<void>) => Promise<T>): Promise<T> {
   return serialized(`project:${pathIdentity(root)}`, async () => {
     const until = Date.now() + 10000;

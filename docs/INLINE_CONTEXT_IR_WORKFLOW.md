@@ -22,7 +22,7 @@ node E:\metasocli\dist\cli\main.js batch run --root <story> --batch <batchId> --
 
 部分段用 `batch plan --selection <selection.json>`，完整格式见 [README](../README.md#四并发持续补位)。单段兼容命令仍为 `generate --plan <id> --segment <id> --confirm`。提交时重新构造同一请求并核对计划哈希，HTTP 客户端将该请求完整 JSON 序列化发送，不能只在提示词或日志里写 true。CLI 会在读取凭据、创建任何任务前拒绝所选范围内含 false 的计划，返回 `INLINE_IR_REQUIRED`；批次只接受冻结的 inline 计划。新计划不能直接覆盖旧计划中的开关或哈希。
 
-默认4个生成占位持续补位，收到 task_id 不释放；终态验证落盘后释放。下载独立最多2个并行。`batch status` 只读本地，`batch resume` 可接回任务并继续原授权内待提交段；旧 `resume --operation` 始终不新建。未显式确认的未知创建保留占位、停止新增，下载失败仅恢复下载。所有新版 CLI 视频创建入口共用安装名额；真实账户并发与限流尚未付费验收。
+默认4个生成占位持续补位，收到 task_id 不释放；终态验证落盘后释放。下载独立最多2个并行。`batch status` 只读本地，`batch resume` 可接回任务并继续原授权内待提交段；旧 `resume --operation` 始终不新建。未显式确认的未知创建保留占位、停止该故事新增，下载失败仅恢复下载。所有新版 CLI 视频创建入口共用安装名额；真实账户并发与限流尚未付费验收。
 
 ## 历史项目与恢复
 
@@ -41,4 +41,4 @@ node E:\metasocli\dist\cli\main.js batch run --root <story> --batch <batchId> --
 
 ## 未知视频的显式新尝试
 
-默认未知不自动重发。当前用户明确授权无 taskId 的某段一次新生成时，用本地 operationId 执行 `generate --retry-of <id> --segment <id> --confirm --accept-unknown-result` 或 `batch retry --operation <id> --confirm --accept-unknown-result`（同时传 --root 与 --plan/--batch）。同一授权只产生一个稳定新尝试；旧未知保留历史与名额，满四个可能名额时等待已知任务终态。其他未确认未知仍阻断；批次其他段仅沿用原保存授权。具体命令与恢复见 [一次性显式重试](VIDEO_UNKNOWN_RETRY.md)。这不改变旧 false 请求、独立 IR 或图片恢复规则，不代表真实接口已验收。
+默认未知不自动重发。当前用户明确授权无 taskId 的某段一次新生成时，用本地 operationId 执行 `generate --retry-of <id> --segment <id> --confirm --accept-unknown-result` 或 `batch retry --operation <id> --confirm --accept-unknown-result`（同时传 --root 与 --plan/--batch）。同一授权只产生一个稳定新尝试；旧未知保留历史与名额，满四个可能名额时等待已知任务终态。同项目其他未确认未知仍阻断；外部故事只保留可能占位，不额外否决空余名额，见 [项目隔离与冷切换](PROJECT_ISOLATION.md)；批次其他段仅沿用原保存授权。具体命令与恢复见 [一次性显式重试](VIDEO_UNKNOWN_RETRY.md)。这不改变旧 false 请求、独立 IR 或图片恢复规则，不代表真实接口已验收。

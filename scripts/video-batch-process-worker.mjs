@@ -28,7 +28,7 @@ const deps={client,fetcher:async()=>new Response(fakeMp4()),checkpoint:async(poi
 try{
   const result=['gate','running'].includes(mode)
     ? await runCli(['generate','--root',root,'--plan',planId,'--segment',segmentId,'--confirm','--submit-only'],deps)
-    : await runBatch(root,batchId,true,deps,{maxPolls:1,pollIntervalMs:0,schedulerWaitMs:mode==='no-wait'?0:10000});
+    : await runBatch(root,batchId,true,deps,{maxPolls:1,pollIntervalMs:0,capacityWaitMs:0,schedulerWaitMs:mode==='no-wait'?0:10000});
   process.send({result});
 }catch(error){process.send({error:{code:error.code,message:error.message}});}
 process.disconnect();
