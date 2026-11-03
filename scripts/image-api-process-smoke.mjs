@@ -23,7 +23,8 @@ if(process.argv[2]==='worker'){
     return new Response(JSON.stringify({data:[{url:'https://offline.example/image.png'}]}));}},
     fetcher:async()=>new Response(png()),checkpoint:async(p,job)=>{if(p===point||(point==='partial-prepared'&&p==='job-reserved'&&job.assetId==='second'))await pause(point);},onResponseChunk:()=>{if(point==='partial-response')void pause(point);}});
 }else{
-  const temp=join(packageRoot,'.work/image-api-20260924/tmp');await mkdir(temp,{recursive:true});const base=await mkdtemp(join(temp,'image-process-'));
+  const output=process.env.METASO_TEST_EVIDENCE_DIR??join(packageRoot,'.work/image-api-20260924');
+  const temp=join(output,'tmp');await mkdir(temp,{recursive:true});const base=await mkdtemp(join(temp,'image-process-'));
   const evidence=[];
   async function worker(root,id,point,runtime){
     const env={...process.env,PATH:dirname(process.execPath),USERPROFILE:join(base,'home'),HOME:join(base,'home'),TMP:temp,TEMP:temp};delete env.METASO_API_KEY;delete env.METASOCLI_IMAGE_API_KEY;delete env.METASO_RUNTIME_DIR;
@@ -65,6 +66,6 @@ if(process.argv[2]==='worker'){
     const runtime=join(base,'contention'),ownerRoot=join(base,'owner-story');await initializeStory(ownerRoot,'owner');const {child,exit}=await worker(ownerRoot,'unused','owner',runtime);
     try{await assert.rejects(acquireImageScheduler(ownerRoot,profile,runtime),{code:'LOCK_BUSY'});}finally{child.kill('SIGKILL');await exit;}
     const owner=await acquireImageScheduler(ownerRoot,profile,runtime);await owner.release();evidence.push({point:'two-process-story',contender:'LOCK_BUSY',deadOwnerReclaimed:true});console.log('PASS two-process story ownership; dead process recovered without dropping unresolved records');
-    await writeFile(join(packageRoot,'.work/image-api-20260924/process-evidence.json'),JSON.stringify({offline:true,cases:evidence},null,2));
+    await writeFile(join(output,'process-evidence.json'),JSON.stringify({offline:true,cases:evidence},null,2));
   }finally{const actual=await realpath(base),parent=await realpath(temp),rel=relative(parent,actual);if(isAbsolute(rel)||rel.startsWith('..')||!rel.startsWith('image-process-'))throw Error('Unsafe cleanup');await rm(actual,{recursive:true,force:true});}
 }

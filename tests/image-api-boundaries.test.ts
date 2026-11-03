@@ -11,7 +11,7 @@ import { sha256Hex } from '../src/storage/canonical.js';
 
 afterEach(async()=>{vi.restoreAllMocks();await cleanup();});
 const deferred=<T>()=>{let resolve!:(value:T)=>void;const promise=new Promise<T>(r=>{resolve=r;});return {promise,resolve};};
-async function evidence(name:string,value:unknown){const folder=resolve('.work/image-audit-fix-20260924');await mkdir(folder,{recursive:true});await writeFile(join(folder,name),JSON.stringify(value,null,2));}
+async function evidence(name:string,value:unknown){const folder=resolve(process.env.METASO_TEST_EVIDENCE_DIR??'.work/image-audit-fix-20260924');await mkdir(folder,{recursive:true});await writeFile(join(folder,name),JSON.stringify(value,null,2));}
 async function deadline<T>(promise:Promise<T>,message:string){
   let timer:ReturnType<typeof setTimeout>;
   try{return await Promise.race([promise,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Error(message)),5000);})]);}

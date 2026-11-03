@@ -36,7 +36,7 @@ node E:\metasocli\dist\cli\main.js batch status --root <story> --batch <id>
 
 ## 图片 all-ready 与已知额度
 
-保持 `gpt-image-2.5 / all-ready`，有效请求上限300秒。无已知额度配置时不加任意并发数字；所有 ready 项可进入 HTTP，实际依赖登记后解锁。缺图、依赖等待、暂停和未知仅影响所属故事。
+保持 `gpt-image-2.5 / all-ready`，有效请求上限600秒。无已知额度配置时不加任意并发数字；所有 ready 项可进入 HTTP，实际依赖登记后解锁。缺图、依赖等待、暂停和未知仅影响所属故事。
 
 冻结 profile 若含 `providerLimits`，同 quotaGroup 的 concurrent/RPM 按共享短事务的预留和请求时间核验。可选 limits/requestStartedAt 保存在受哈希保护的协调表；旧字段缺失仍可读。活动或最近一分钟快照中的较严格已知限制继续适用，未知不释放配置所约束的容量；无时间的旧可能在途项保守计入 RPM，不能靠猜测超时释放。batch 限制用于冻结待提交范围，不当作全局并发上限。
 

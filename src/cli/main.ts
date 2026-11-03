@@ -29,12 +29,18 @@ import { runImages, imageStatus, recoverImage, attachImageResult, resolveImage, 
 import { imageCredentialStatus, loadImageApiKey } from '../images/credentials.js';
 import { YicImageClient } from '../images/client.js';
 import { readImageJob } from '../images/store.js';
+import { prepareImages } from '../images/preparation.js';
+import { collectImages, imageSummary, imageBlockerCategory } from '../images/reporting.js';
 
 export const HELP = `metasocli 0.1.0 — independent Metaso MiniMax-H3 CLI
 All story commands require --root <dedicated-story-directory>.
 
 auth status
 images auth-status                 Local image credential status only; no remote authentication probe.
+images prepare --root <path> (--batch <json>|--preparation <id>) [--python <executable>]
+images collect --root <path> --preparation <id> [--python <executable>]
+  prepare/collect are local only: no credential loading, network, generation, recovery or registration.
+  images run/status/resume/retry accept --summary; compact status requires --plan.
 images plan --root <path> (--episodes <ordered,ids>|--selection <json>|--assets <ordered,ids>|--all-episodes)
             [--profile <json>] --submission-mode all-ready [--restart-of <previousImagePlanId>]
 images run --root <path> --plan <imagePlanId> --confirm [--accept-unknown-result]
@@ -124,12 +130,14 @@ const flags: Record<string, { strings?: string[]; booleans?: string[] }> = {
   'batch retry': { strings: ['batch', 'operation', 'max-polls', 'poll-ms', 'scheduler-wait-ms', 'capacity-wait-ms', 'capacity-poll-ms'], booleans: ['confirm', 'accept-unknown-result'] },
   'batch status': { strings: ['batch'] }, 'batch register': {},
   'images auth-status': {},
+  'images prepare': { strings:['batch','preparation','python'] },
+  'images collect': { strings:['preparation','python'] },
   'images plan': { strings:['episodes','selection','assets','profile','submission-mode','restart-of'],booleans:['all-episodes'] },
-  'images run': { strings:['plan','accept-existing-unknown','capacity-wait-ms','capacity-poll-ms'],booleans:['confirm','accept-unknown-result'] }, 'images resume': { strings:['plan','capacity-wait-ms','capacity-poll-ms'] },
-  'images status': { strings:['plan'] }, 'images recover': { strings:['operation'] },
+  'images run': { strings:['plan','accept-existing-unknown','capacity-wait-ms','capacity-poll-ms'],booleans:['confirm','accept-unknown-result','summary'] }, 'images resume': { strings:['plan','capacity-wait-ms','capacity-poll-ms'],booleans:['summary'] },
+  'images status': { strings:['plan'],booleans:['summary'] }, 'images recover': { strings:['operation'] },
   'images attach-result': { strings:['operation','file','expected-sha256'],booleans:['confirm-result-link'] },
   'images resolve': { strings:['operation','outcome','evidence'],booleans:['confirm-resolution'] },
-  'images retry': { strings:['operation','capacity-wait-ms','capacity-poll-ms'],booleans:['confirm'] },
+  'images retry': { strings:['operation','capacity-wait-ms','capacity-poll-ms'],booleans:['confirm','summary'] },
 };
 function capacityOptions(v:Record<string,Value>){
   const capacityWaitMs=number(v,'capacity-wait-ms'),capacityPollMs=number(v,'capacity-poll-ms');
@@ -160,6 +168,11 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
     if (command === 'auth status') return { exitCode: 0, data: { ...(await credentialStatus()), provider: 'Metaso', model: 'MiniMax-H3', liveCheckPerformed: false } };
     if (command === 'images auth-status') return {exitCode:0,data:{...await imageCredentialStatus(),provider:'yiciyuang',requestedModel:'gpt-image-2.5',liveCheckPerformed:false}};
     const root = resolve(required(v, 'root'));
+    // Local workflow branches precede even construction of the lazy network/credential adapter.
+    if(command==='images prepare')return {exitCode:0,data:await prepareImages(root,{batch:v.batch as string|undefined,preparation:v.preparation as string|undefined,python:v.python as string|undefined})};
+    if(command==='images collect'){
+      const data=await collectImages(root,{preparation:required(v,'preparation'),python:v.python as string|undefined});return {exitCode:data.complete?0:2,data};
+    }
     if (command.startsWith('images ')) {
       const secrets=[process.env.METASOCLI_IMAGE_API_KEY??''];
       let imageClient:Promise<YicImageClient>|undefined;
@@ -170,14 +183,14 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
       if(command==='images plan')data=await createImagePlan(root,{...(v.episodes?{episodes:required(v,'episodes').split(',').map(s=>s.trim())}:{}),
         ...(v.assets?{assets:required(v,'assets').split(',').map(s=>s.trim())}:{}),...(v.selection?{selection:await readJson(resolve(required(v,'selection')))}:{}),
         allEpisodes:v['all-episodes']===true,profile:await loadImageProfile(v.profile as string|undefined),submissionMode:required(v,'submission-mode'),...(v['restart-of']?{restartOf:required(v,'restart-of')}:{})});
-      else if(command==='images status')data=await imageStatus(root,v.plan as string|undefined);
+      else if(command==='images status')data=v.summary?await imageSummary(root,required(v,'plan')):await imageStatus(root,v.plan as string|undefined);
       else if(command==='images run'||command==='images resume'||command==='images retry') {
         Object.assign(imageDeps,capacityOptions(v));
         if(command!=='images resume'&&v.confirm!==true)fail('IMAGE_NOT_AUTHORIZED','Authorize this image provider and frozen scope/new attempt before --confirm.');
         if(v['accept-existing-unknown']!==undefined)imageDeps.acceptExistingUnknown=required(v,'accept-existing-unknown').split(',').map(s=>s.trim());
         const retryOf=command==='images retry'?required(v,'operation'):undefined;
         const id=retryOf?(await readImageJob(root,retryOf)).planId:required(v,'plan');
-        const result=await runImages(root,id,command!=='images resume',imageDeps,retryOf,v['accept-unknown-result']===true);data=result;exitCode=result.run?.status==='complete'?0:2;
+        const result=await runImages(root,id,command!=='images resume',imageDeps,retryOf,v['accept-unknown-result']===true);data=v.summary?await imageSummary(root,id,result):result;exitCode=result.run?.status==='complete'?0:2;
       }else if(command==='images recover'){const job=await recoverImage(root,required(v,'operation'),imageDeps);data=job;exitCode=job.status==='registered'?0:2;}
       else if(command==='images attach-result')data=await attachImageResult(root,required(v,'operation'),resolve(required(v,'file')),required(v,'expected-sha256'),v['confirm-result-link']===true,imageDeps);
       else if(command==='images resolve')data=await resolveImage(root,required(v,'operation'),required(v,'outcome'),await readJson(resolve(required(v,'evidence'))),v['confirm-resolution']===true,imageDeps);
@@ -308,7 +321,7 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
       return { exitCode: jobs.some(jobExit) ? 2 : 0, data: { jobs, videoRetries } };
     }
     return fail('CLI_ARGUMENT', 'Unsupported command.');
-  } catch (error) { return { exitCode: 1, data: { error: publicError(error) } }; }
+  } catch (error) { const detail=publicError(error);return { exitCode: 1, data: { error: detail,...(args[0]==='images'&&args.includes('--summary')?{blocker:imageBlockerCategory(detail.code)}:{}),...(error instanceof Error&&'preparationProgress' in error?{preparation:error.preparationProgress}:{}) } }; }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const result = await runCli(process.argv.slice(2));

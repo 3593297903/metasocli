@@ -37,25 +37,26 @@ python -B scripts/validate_handoff.py request <request.json> --draft <draft.json
 python -B scripts/validate_handoff.py recipe <recipe.json> --request <request.json> --draft <draft.json>
 ```
 
-第一条核对素材与本集的实际引用/依赖，第二条还核对传入 CLI 的完整配方，防止中间摘要、改名或漏绑定。CLI 随后执行 `import --root <story> --draft <draft.json>`。若宿主没有 Python，按同一契约核对并明确说明未运行确定性校验，不因此增加新的批准环节。校验通过不代替对原文语义的完整阅读。
+上面命令保留为手工诊断及 built_in 路径。API 主流程由 [固定图片工作流](references/image-workflow.md) 的 images prepare 调用同一 recipe 校验器（其中已包含 request/draft 核对）及原 import，不重复现场逐集编排。prepare 必须实际通过 Python 校验；缺 Python 时报告具体缺项，不假称完成。校验通过不代替对原文语义的完整阅读。
 
 ## 后端选择与 API 全量提交
 
 沿用当前任务明确指定的后端；未指定时默认 api，不再询问后端选择。历史图片的 generationMode 不决定新任务的后端；已有图片、冻结计划和未完成请求仍按原身份复用或恢复。API 模式完整读取 [图片 API 实际用法](../../docs/IMAGE_API_USAGE.md)，使用独立图片凭据，禁止拿 METASO_API_KEY 或视频生成授权冒充图片供应商授权。缺少图片凭据时先完成素材分析、交接、导入和图片计划，报告需配置图片 Key，不自动调用宿主生图兜底。默认后端不扩大付费授权：仅有离线实施授权时停在图片 plan，不执行 run；已经明确授权供应商及冻结范围时直接执行，不逐图询问。
 
-先完成所有选中集的 request/recipe 校验与 import，再运行：
+先完整读取 [固定图片工作流](references/image-workflow.md)，把全部已确认草稿和交接写入一个 image-batch.json，然后：
 
 ```text
-node <package-root>/dist/cli/main.js images plan --root <story> --episodes <有序集ID> --profile <无密钥配置.json> --submission-mode all-ready
-node <package-root>/dist/cli/main.js images run --root <story> --plan <imagePlanId> --confirm
-node <package-root>/dist/cli/main.js images status --root <story> --plan <imagePlanId>
+node <package-root>/dist/cli/main.js images prepare --root <story> --batch <image-batch.json>
+node <package-root>/dist/cli/main.js images run --root <story> --plan <imagePlanId> --confirm --summary
+node <package-root>/dist/cli/main.js images collect --root <story> --preparation <preparationId>
 ```
 
-部分段改用 `--selection <json>`；范围参数互斥。计划明确列出复用、首轮可发、依赖等待、规格冲突和请求数量。已有原文要求 2K/4K 而默认尺寸不满足时，选择文档支持且符合原要求的显式 size，不能改短原配方或删除规格文字。人物/场景/道具默认横板 1920x1088，竖首帧 1088x1920；均不冒充 2K/4K 或精确数学比例。
+run 只在已有授权覆盖当前供应商/冻结范围/本次尝试后执行；prepare/collect 永不联网或付费。已有独立 images plan 仍直接复用，旧计划无需迁移。部分段在清单 scope.selection 使用原有序选择结构；范围互斥。
+计划明确列出复用、首轮可发、依赖等待、规格冲突和请求数量。已有原文要求 2K/4K 而默认尺寸不满足时，选择文档支持且符合原要求的显式 size，不能改短原配方或删除规格文字。人物/场景/道具默认横板 1920x1088，竖首帧 1088x1920；均不冒充 2K/4K 或精确数学比例。
 
 API 模式把所有 ready 输入集中发出，每素材 n=1；200 个独立 ready 项就是 200 次独立请求。依赖等待的是实际参考文件，不是生成槽位；登记后立即解锁下游。下载默认2、解码2、登记1，不限制 ready 生成启动。配置的 concurrent/RPM 在共享短事务内核验，额度不足保存未提交等待；batch 限制按冻结范围检查。没有已知额度时不增加任意并发上限；供应商真实容量仍未验证。
 
-CLI 自动保存完整回执、下载原文件、检查格式/大小并按条件登记。用 `images status` 的逐项文件和 `.metasocli/image-runs/<planId>-index.md` 展示首次结果；不做审美验收、OCR、自动重画或逐图确认。保存 1.1.0 API result 交接，使用每项 `.metasocli/image-receipts/<operationId>/execution.json` 与其实际文件 SHA-256，核对 requestedModel 来自请求、reportedModel 来自回执；缺报就填 null，不能推断底层型号。运行 result 校验器；CLI 已正式登记的同一文件无需再次 assets register。
+CLI 自动保存完整回执、下载原文件、检查格式/大小并按条件登记。用 `images status` 的逐项文件和 `.metasocli/image-runs/<planId>-index.md` 展示首次结果；不做审美验收、OCR、自动重画或逐图确认。由 images collect 保存可完整表达的逐集 1.1.0 API result 交接，未完成集输出独立部分报告；它使用每项 `.metasocli/image-receipts/<operationId>/execution.json` 与其实际文件 SHA-256，核对 requestedModel 来自请求、reportedModel 来自回执；缺报就填 null，不能推断底层型号。运行 result 校验器；CLI 已正式登记的同一文件无需再次 assets register。
 
 `images resume` 可继续原授权内尚未提交项；`images recover` 仅恢复已有结果。同步 HTTP 断线且无完整回执是未知，不可凭本地 operationId 查询供应商或重 POST；按实际用法执行明确的人工关联/证据解除/新尝试授权。不得自动退回 built_in、换模型、重画 ready 图或清空账本。旁白不进入图片计划或 edits 文件。
 
@@ -85,7 +86,7 @@ node <package-root>/dist/cli/main.js assets list --root <story>
 
 完整遵循 [项目隔离与冷切换](../../docs/PROJECT_ISOLATION.md)。不同故事的缺图、依赖等待、暂停、未知或目录异常不阻止本故事使用空余容量；同故事锁、阶段互斥、未知阻断和一次性重试规则保留。默认不要求 --accept-existing-unknown；旧确认仅保留审计身份，不扩大授权或重发未知。
 
-图片保持 gpt-image-2.5 / all-ready / 有效300秒，配置的 concurrent/RPM 共享核验。视频保持 MiniMax-H3、context_ir_enabled:true，全机同 runtime 合计最多4个生成名额，项目 concurrency 为附加上限；1个外部未知留下3个空位，4个未知则新增视频等待，图片与原结果恢复仍可运行。不得删除旧未知、换 runtime 或伪造终态腾位。
+图片保持 gpt-image-2.5 / all-ready / 有效600秒，配置的 concurrent/RPM 共享核验。视频保持 MiniMax-H3、context_ir_enabled:true，全机同 runtime 合计最多4个生成名额，项目 concurrency 为附加上限；1个外部未知留下3个空位，4个未知则新增视频等待，图片与原结果恢复仍可运行。不得删除旧未知、换 runtime 或伪造终态腾位。
 
 images run/resume/retry 与 batch run/resume/retry 支持 --capacity-wait-ms 30000 --capacity-poll-ms 250。耗尽后保留原计划/批次授权和 operationId，按原 resume 继续；准确区分本项目未知、依赖未就绪、共享容量等待、同项目进程占锁和协调器损坏。视频批次只查询当前故事，其他故事由其自身恢复落盘终态，不自动跟随外部 GET。
 

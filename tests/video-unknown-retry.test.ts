@@ -88,7 +88,7 @@ it('task5 retry waits behind three accepted tasks plus its old unknown, then has
   expect((await batchStatus(f.root,f.batch.plan.batchId)).items[4]!.job!.operationId).toBe(candidate);
   expect(occupied(await reconcileRuntime(f.root))).toMatchObject([{operationId:old.operationId,status:'submit_unknown'}]);
   await runCli(args,deps);expect(posts).toHaveLength(8);
-  const folder=resolve('.work/unknown-video-retry-20261016');await mkdir(folder,{recursive:true});
+  const folder=resolve(process.env.METASO_TEST_EVIDENCE_DIR??'.work/unknown-video-retry-20261016');await mkdir(folder,{recursive:true});
   await writeFile(join(folder,'replenishment.json'),JSON.stringify({fakeOnly:true,posts,oldOperationId:old.operationId,newOperationId:candidate,trace,result},null,2));
 },180000);
 it('a second unknown needs another explicit authorization targeting the new local operation; original command never creates a third POST', async()=>{

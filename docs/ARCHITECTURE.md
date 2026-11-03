@@ -1,5 +1,11 @@
 # metasocli 独立项目方案
 
+2026-11-03 路径校验补修：仅在 Windows 的 `realpath` 对末级普通文件返回 EPERM，且此前 lstat 确认非链接、单一链接数及可用 bigint 身份时，`safePath` 从根重新执行完整检查。与原 PATH_CHANGED 共用最多5次尝试；新分支间隔25ms，主动等待合计最多100ms（不含文件系统调用耗时），正常路径无新增等待。持续失败抛出原文件系统错误，目录祖先/其他操作及其他错误不适用此分支；链接、旧项目边界和锁所有权保护不变。不会将异常当成无锁、删除锁或重发任务。可用 `tests/storage-path-retry.test.ts` 验证注入错误边界，`node scripts/lock-concurrency-process-smoke.mjs` 进行三轮实际锁压力及双进程互斥验收，测试产物可由 `METASO_TEST_EVIDENCE_DIR` 定位。
+
+同轮压力还复现了 Owner 读取返回 ENOENT、随后的检查却已看到替代锁的窗口。`liveLease` 仅对此情形最多进行5次只读观察，重观察间隔25ms，每次重新校验完整路径并读取当前 Owner；确实不存在时才沿用无锁语义，持续错误仍抛原错误。不在观察层重试 `safePath` 的 EPERM/PATH_CHANGED 失败，获取、释放、死进程接管和 recovery 门闩协议未变。上述100ms是每次路径校验的新分支主动等待预算，不是整个锁观察、文件系统调用或业务操作的墙钟上限。
+
+2026-11-02 图片工作流第一阶段：新增 images/workflow-contracts、preparation、handoff、reporting、workflow-timing，组合现有 import、图片规划器、Python交接校验器和执行器。Core 的无副作用 normalizeImportDraft/mergeImport 与原导入共享规则，图片选择也复用原有序依赖逻辑。准备租约仅在故事内；逐集导入独立短事务；完整 plan-intent 先于正式计划落盘，恢复验证同一ID。输入快照/准备状态为新增辅助目录，旧 Story/ImagePlan/Job/Run/共享账本 schema 不变。collector 只读执行证据，另写唯一 collection；未知和未完成项进入独立报告，不伪造旧result契约。summary 为既有状态投影，无新HTTP或额度算法。详见 [已实现图片命令](IMAGE_API_USAGE.md)。
+
 2026-11-02：已实现 [项目隔离与冷切换](PROJECT_ISOLATION.md)。图片/视频运行锁在故事内，共享协调锁只做短事务；只同步及查询当前故事，外部快照保留。外部未知占容量但不全面否决空位；视频全机合计4与项目 concurrency 分开核验，容量有界等待。共享哈希、UUID/根与操作/任务身份冲突继续拒绝，旧任务恢复不改请求。旧全局运行锁只用于冷升级检查，不支持新旧二进制热混跑。
 
 2026-09-21 批次实施补充：新增不可变批次、授权运行索引和安装级共享生成预留，默认4个生成占位持续补位、2个独立下载。单段视频生命周期拆为短状态写锁与锁外 HTTP；按共享协调锁→项目写锁顺序，用提交归属 token 区分活跃 submitting 和失联 unknown。terminal Job 持久化后才释放名额，batch resume 可在原授权范围内补交，旧 resume 永不 POST。Plan/Story/Job 原格式及 H3、时长、图片、旁白构造保持兼容。详见 [批次命令](../README.md#四并发持续补位) 和 [实施报告](VIDEO_BATCH_CONCURRENCY_IMPLEMENTATION_REPORT.md)；下文串行/长锁描述属于早期设计。

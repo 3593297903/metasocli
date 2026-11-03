@@ -62,13 +62,12 @@ it('sustains four remote slots across 16 ordered items, replenishes on segment 3
   const result = await runBatch(f.root, f.batch.plan.batchId, true, { client, fetcher }, { pollIntervalMs: 0, maxPolls: 30 });
   expect(posts).toEqual(Array.from({ length: 16 }, (_, i) => i + 1));
   expect(peakHttp).toBe(4); expect(peakSlots).toBe(4); expect(peakDownload).toBe(2);
-  await mkdir(resolve('.work'), { recursive: true });
-  await writeFile(resolve('.work/video-batch-debug.json'), JSON.stringify(result, null, 2));
+  const folder = resolve(process.env.METASO_TEST_EVIDENCE_DIR??'.work'); await mkdir(folder, { recursive: true });
+  await writeFile(join(folder,'video-batch-debug.json'), JSON.stringify(result, null, 2));
   expect(result.summary, JSON.stringify({ unfinished: result.items.filter(i => i.job?.status !== 'downloaded').map(i => ({order:i.order,status:i.job?.status,error:i.job?.lastError})), errors:result.run!.items.filter(i=>i.error) })).toMatchObject({ reusable: 15, downloads: 1 });
   const resumed = await runBatch(f.root, f.batch.plan.batchId, false, { client, fetcher }, { pollIntervalMs: 0, maxPolls: 30 });
   expect(resumed.run!.status).toBe('complete'); expect(posts).toHaveLength(16);
   for (const item of resumed.items) expect(item.job!.output!.path).toBe('outputs/' + item.episodeId + '/' + item.segmentId + '-' + item.job!.operationId + '.mp4');
-  const folder = resolve('.work'); await mkdir(folder, { recursive: true });
   await writeFile(join(folder, 'video-batch-trace.json'), JSON.stringify({ fakeClientsOnly: true, posts, peakHttp, peakSlots, peakDownload, final: resumed.summary, trace }, null, 2));
 }, 180000);
 

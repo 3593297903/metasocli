@@ -35,7 +35,7 @@ if(process.argv[2]==='worker'){
       const lease=await acquireLease(config.file);process.send({ready:true});await new Promise(()=>{setInterval(()=>{},1000);});await lease.release();
     }else if(config.mode==='image'){
       assert.match(config.url,/^http:\/\/127\.0\.0\.1:\d+\//);
-      const result=await runImages(config.root,config.planId,config.authorize!==false,{capacityWaitMs:config.wait??0,capacityPollMs:10,client:{async create(_root,input,p){assert.equal(p.model,'gpt-image-2.5');assert.equal(p.generationTimeoutMs,300000);return nativeFetch(config.url,{method:'POST',body:JSON.stringify(input)});}}});
+      const result=await runImages(config.root,config.planId,config.authorize!==false,{capacityWaitMs:config.wait??0,capacityPollMs:10,client:{async create(_root,input,p){assert.equal(p.model,'gpt-image-2.5');assert.equal(p.generationTimeoutMs,600000);return nativeFetch(config.url,{method:'POST',body:JSON.stringify(input)});}}});
       process.send({result,ids:(await listImageJobs(config.root)).map(j=>({projectId:j.projectId,operationId:j.operationId,status:j.status,attempt:j.attempt}))});
     }else if(config.mode==='video'){
       const result=await runBatch(config.root,config.batchId,config.authorize!==false,{client:{async create(request){assert.equal(request.context_ir_enabled,true);assert.equal(request.model,'MiniMax-H3');const taskId='isolation-'+process.pid;process.send({post:taskId,at:new Date().toISOString()});await new Promise(r=>process.once('message',r));return {taskId,evidence};},async query(id){return running(id);}}},{maxPolls:1,pollIntervalMs:0,capacityWaitMs:10000,capacityPollMs:25});

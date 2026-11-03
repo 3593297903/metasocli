@@ -1,5 +1,30 @@
 # 图片 API 实际用法（2026-09-24）
 
+## 固定准备与结果收集（2026-11-02）
+
+新增本地 `images prepare`、`images collect`，六个项目 Skill 共用 [固定工作流](../skills/metasocli-reference-images/references/image-workflow.md)。完整配方已确认后，使用 [清单示例](../examples/image-batch.json)，将 projectId 换成当前故事 UUID，输入路径以故事根为基准：
+
+```powershell
+node E:\metasocli\dist\cli\main.js images prepare --root <story> --batch <image-batch.json>
+node E:\metasocli\dist\cli\main.js images prepare --root <story> --preparation <preparationId>
+# 仅在既有授权覆盖图片供应商、冻结范围和本次尝试后运行：
+node E:\metasocli\dist\cli\main.js images run --root <story> --plan <planId> --confirm --summary
+node E:\metasocli\dist\cli\main.js images status --root <story> --plan <planId> --summary
+node E:\metasocli\dist\cli\main.js images collect --root <story> --preparation <preparationId>
+```
+
+prepare 的两个输入互斥；prepare/collect 可指定 `--python <Python可执行文件>`，必须实际执行包内 Python 3.10+ 校验，缺失时返回错误，不安装软件。两命令不读取/解密 Key、不构造网络客户端、不生成/下载/登记图片。已有正式计划直接走原命令，不要求创建准备记录或迁移旧故事。`--summary` 同样适用于原 run/resume/retry，只改变返回格式；旧默认 JSON 不变。
+
+准备目录为 `.metasocli/image-preparations/<preparationId>/`：input.json 和 inputs 保存完整字节与哈希，state.json 保存逐集检查点，plan-intent.json 保存完整冻结计划，summary.json/timings.json 保存可重建摘要及阶段计时，collections/<UUID>/ 保存各次收集。by-input 只是可重建索引；摘要/索引不是授权或事实来源。同输入指纹复用 ID，登记媒体与 revision 的正常推进不会重建计划；原文 basename、规范化区间、提示词、图序、旁白和旧正式计划 schema 保持。仅本故事准备租约，不持有 project.lock 嵌套调用 import，不恢复全局运行锁。
+
+导入仍逐集原子操作，不是全剧事务。失败摘要给出已保存检查点及实际观察到的已导入集；原命令恢复会复核这些集，用户中途编辑不被覆盖。计划先完整保存 intent 再写正式计划，最后记录准备完成；中断在任一步都验原 intent 并复用同一计划。冲突/损坏保留证据并拒绝，不能删记录重做来掩盖未知任务。
+
+collect 只使用冻结范围、run 中准确 operationId 以及现有 Job/receipt/execution/原暂存图的真实证据，验证原文件字节后调用旧 result 校验器。部分集不会输出伪完整 result：未知/执行中/待下载或登记/范围外项留在 collection-report.json；已完成图片可立即展示。recipeSha256 是规范化 prompt 哈希；executionSha256 是文件原始字节哈希；reportedModel 缺报为 null。重复收集写新目录，不重编码、不重新登记、不修写旧 Job/账本。读取期间变化有界重采样，持续变化明确报错。
+
+退出码：成功准备、完整可表达的结果交接为0；部分收集或原执行需处理为2；参数/输入/证据/权限等错误为1。完整交接可以含有明确失败，须继续看逐项状态，不能把退出0理解成全部生成成功。摘要独立统计 unknown、failed/rejected、各接收/登记阶段，异常最多显示50项并保留总数和原记录位置。计时为本地单调耗时及 UTC 时间戳；localStartToHeadersMs 不是供应商受理/推理时间，没有响应头时为 null。
+
+本阶段不改变 all-ready、有效600秒、共享额度、下载/解码队列、视频四名额或 H3 参数。没有第二阶段长期缓存或整剧事务。离线实测与限制见 [本轮实施报告](../.work/image-workflow-implementation-20261102/implementation-report.md)（本机交付证据，不随 npm 包分发），不以准备成功代替真实 API 验收。
+
 本项目默认使用独立 `yiciyuang` 图片后端，请求模型固定 `gpt-image-2.5`。它是供应商别名，请求该名称不证明底层型号。已实现本地 all-ready 工作流；真实生成效果、账户权限、余额、并发/RPM、连接时限和 URL 有效期以实际账户和验收记录为准。
 
 接口依据是公开[专属文档](https://newapi.yiciyuang.com/docs/exclusive-gpt-image-2)：无参考图 POST `https://api.yiciyuang.com/v1/images/generations` JSON；有参考图 POST `/v1/images/edits` multipart，单文件 `image`、多文件按依赖顺序重复 `image[]`。每资产一个完整 prompt、n=1。多文件字段已于2026-10-19以image[]取得真实成功回执并登记文件，不能据此承诺所有供应商请求均成功；没有批量/轮询/task_id 协议，没有自动 POST 重试。
@@ -79,17 +104,23 @@ node E:\metasocli\dist\cli\main.js images retry --root <story> --operation <id> 
 
 同步 HTTP 无供应商查询契约，关机可能使未返回请求永久未知；CLI 不提供常驻后台保证。所有 URL 下载均不携带图片 Key，拒绝未验证重定向。标准输出对密钥和链接脱敏，原始回执仅本地用于恢复。
 
-### 图片等待窗口（2026-10-31 调整为300秒）
+### 图片等待窗口（2026-11-03 调整为600秒）
 
-图片创建请求默认等待300秒（`generationTimeoutMs: 300000`），有效总时限为 `min(generationTimeoutMs, 300000)`。正式客户端通过锁定版本的 undici、请求级 dispatcher，将底层响应头/响应体等待与该有效时限对齐。旧计划即使冻结了600秒或更长的值，更新后的客户端新发出的请求也最多等待300秒；旧计划字段、哈希、请求和回执保持不变。显式配置的更短时限仍生效，已经启动的旧进程不受此次构建影响。
+图片创建请求默认等待600秒（`generationTimeoutMs: 600000`）。原300秒设置（包括历史计划冻结的 `300000`）在后续新请求中按600秒执行；其他设置的有效总时限为 `min(generationTimeoutMs, 600000)`，因此其他显式更短时限仍生效，超过600秒的值封顶为600秒。正式客户端通过锁定版本的 undici、请求级 dispatcher，将底层响应头/响应体等待与该有效时限对齐。旧计划字段、哈希、请求和回执保持不变；超时适配不会重新提交历史未知请求。已经启动的旧进程不受此次构建影响。
 
 计时从每项创建请求发起时开始，覆盖该请求及其响应体接收，不是整批工作流或Codex聊天的总耗时。只作用于图片创建请求，沿用当前连接/代理 dispatcher，不修改全局网络设置或视频/独立图片下载请求；普通 CLI 无需额外 `--import` 临时脚本。升级需按锁文件安装依赖并重新构建。
 
 HTTP 400 的完整回执若包含已知 `upstream_text_reply`，状态信息会指出供应商返回了文字而非图片。完整原文仍保存在该 operation 的 `response.bin`，不会把任意供应商文本、提示词或 URL 复制到公共错误信息。该诊断不证明未扣费，不将未知状态改为可自动重试；恢复不会重新 POST。
 
-连接错误仍为 `IMAGE_TRANSPORT_UNKNOWN`，保留旧请求且不自动重发；诊断只记录允许名单中的错误码（如 `UND_ERR_HEADERS_TIMEOUT`、`ECONNRESET`）、总时限标识和实际有效时限，不输出原始异常消息、认证头或签名链接。完整HTTP错误响应仍按原样保存；达到300秒后停止等待不代表供应商已经停止生成。
+连接错误仍为 `IMAGE_TRANSPORT_UNKNOWN`，保留旧请求且不自动重发；诊断只记录允许名单中的错误码（如 `UND_ERR_HEADERS_TIMEOUT`、`ECONNRESET`）、总时限标识和实际有效时限，不输出原始异常消息、认证头或签名链接。完整HTTP错误响应仍按原样保存；达到600秒后停止等待不代表供应商已经停止生成。
 
 ## 离线验证
+
+`images prepare` 会将选中素材与冻结交接决定逐项核对，包括故事中继承的旧配方。选中 `blocked` 返回 `IMAGE_PREPARATION_BLOCKED` 并保留快照；选中 `skipped_optional` 或共享资产决定冲突返回 `IMAGE_HANDOFF_CONFLICT`，不会生成可提交计划。已有准备记录和计划意图恢复也执行该核对，不以旧校验标记跳过。范围外的禁止生成项不阻止独立范围。
+
+`images status --summary` 与 `images collect` 在新计划尚无 run 时，会只读解析 `recover` 条目冻结的原 operationId，并验证原任务归属。未知、响应已保存、待下载、待登记分别显示；缺失或不匹配记录报错。原任务保留原 planId，收集结果不足时只输出部分报告，不请求供应商或自动重发。
+
+重复准备先校验历史记录的元数据和指纹，再完整验证匹配输入的快照。无关旧内容损坏不阻止新范围；匹配内容损坏、显式恢复目标损坏及元数据损坏仍拒绝，不删除历史记录。
 
 在项目目录并将 TMP/TEMP 设为 `.work/image-api-20260924/tmp` 后：`npm run build`、`npm test`、`npm run test:image-skill`、`npm run test:process`、`npm run test:image-api`、`npm run test:image-api:process`。最后一项启动并强制终止自己的假客户端子进程；不需要真实 Key。结果和环境限制见 [实施报告](IMAGE_API_INTEGRATION_IMPLEMENTATION_REPORT.md)。
 

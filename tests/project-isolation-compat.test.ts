@@ -93,8 +93,8 @@ it('C5/C6: old immutable video plan/body untouched by registration; status is re
   const f=await batchFixture([1]),p=await loadPlan(f.root,f.batch.plan.items[0]!.planId),before=canonicalSha256(p),batchBefore=f.batch.plan.batchHash;
   const request=(await validatePlan(f.root,p)).built[0]!.request;expect(request).toMatchObject({model:'MiniMax-H3',context_ir_enabled:true,duration:7});
   await reconcileRuntime(f.root);const ledgerFile=join(runtimeDirectory(),'video-ledger.json'),bytes=await readFile(ledgerFile);await inspectRuntime();expect(await readFile(ledgerFile)).toEqual(bytes);
-  expect(canonicalSha256(await loadPlan(f.root,p.planId))).toBe(before);expect((await loadBatch(f.root,f.batch.plan.batchId)).batchHash).toBe(batchBefore);expect(effectiveImageTimeout(600000)).toBe(300000);expect(profile.model).toBe('gpt-image-2.5');
-  records.push({case:'C5/C6',planHash:before,batchHash:batchBefore,bodyHash:canonicalSha256(request),ledgerHash:sha256Hex(bytes),imageTimeout:300000,posts:0});
+  expect(canonicalSha256(await loadPlan(f.root,p.planId))).toBe(before);expect((await loadBatch(f.root,f.batch.plan.batchId)).batchHash).toBe(batchBefore);expect(effectiveImageTimeout(600000)).toBe(600000);expect(effectiveImageTimeout(300000)).toBe(600000);expect(profile.model).toBe('gpt-image-2.5');
+  records.push({case:'C5/C6',planHash:before,batchHash:batchBefore,bodyHash:canonicalSha256(request),ledgerHash:sha256Hex(bytes),imageTimeout:600000,posts:0});
 });
 
 it('C1: old video batch acknowledgement and reserved attempt survive interruption without another authorization',async()=>{

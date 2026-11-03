@@ -14,7 +14,7 @@ import type { VideoClient } from '../src/metaso/client.js';
 afterEach(cleanup);
 const records: unknown[] = [];
 afterAll(async () => {
-  const output = resolve('.work/video-batch-review-fix');
+  const output = resolve(process.env.METASO_TEST_EVIDENCE_DIR??'.work/video-batch-review-fix');
   await mkdir(output, { recursive: true });
   await writeFile(join(output, 'boundary-regressions.json'), JSON.stringify({ fakeClientsOnly: true, platform: process.platform, cases: records }, null, 2));
 });

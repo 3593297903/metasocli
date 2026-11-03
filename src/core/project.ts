@@ -49,10 +49,8 @@ export async function initializeStory(input: string, name: string): Promise<Stor
   await saveStory(root, story);
   return story;
 }
-export async function importStory(root: string, value: unknown, replace = false): Promise<Story> {
+export function normalizeImportDraft(value: unknown, raw: Buffer) {
   const draft = parse(ImportDraft, value);
-  // Explicit source is read once and copied. Runtime never imports modules from its location.
-  const raw = await readStable(resolve(draft.source));
   const text = normalizeText(raw);
   validateCoverage(text, draft.segments);
   const rawHash = sha256Hex(raw), textHash = sha256Hex(text);
@@ -70,39 +68,56 @@ export async function importStory(root: string, value: unknown, replace = false)
       return { ...s, ...normalizedDuration, prompt, promptHash: sha256Hex(prompt) };
     }),
   });
+  return { draft, raw, text, rawHash, textHash, episode };
+}
+export type NormalizedImport = ReturnType<typeof normalizeImportDraft>;
+/** Shared dry normalization/merge, also used by the preparation preflight. No file writes. */
+export function mergeImport(story: Story, normalized: NormalizedImport, replace = false): Story {
+  const { draft, episode } = normalized;
+  const previous = story.episodes.find(e => e.id === episode.id);
+  if (previous && canonicalSha256(previous) !== canonicalSha256(episode) && !replace) fail('EPISODE_EXISTS', 'Episode differs; use explicit replacement or a new episode id.');
+  const nextAssets = [...story.assets];
+  for (const recipe of draft.recipes) {
+    const previousAsset = nextAssets.find(a => a.recipe.assetId === recipe.assetId);
+    const recipeHash = canonicalSha256(recipe);
+    if (previousAsset && previousAsset.recipeHash !== recipeHash) fail('RECIPE_CONFLICT', `Asset ${recipe.assetId} has a different recipe; use a new asset id.`);
+    if (!previousAsset) nextAssets.push({ recipe, recipeHash, media: null });
+  }
+  for (const asset of nextAssets) {
+    if (asset.recipe.kind === 'narration' && (asset.recipe.dependencies.length || asset.recipe.exactText.length)) fail('RECIPE_DEPENDENCY', 'Narration is an existing voice reference, not an image generation recipe.');
+    if (asset.recipe.dependencies.some(id => nextAssets.find(a => a.recipe.assetId === id)?.recipe.kind === 'narration')) fail('RECIPE_DEPENDENCY', 'Image recipes cannot depend on narration audio.');
+    if (new Set(asset.recipe.dependencies).size !== asset.recipe.dependencies.length || asset.recipe.dependencies.some(id => !nextAssets.some(a => a.recipe.assetId === id) || id === asset.recipe.assetId)) fail('RECIPE_DEPENDENCY', 'Recipe dependencies must uniquely reference other declared assets.');
+  }
+  const visited = new Set<string>(), active = new Set<string>();
+  const visit = (id: string) => {
+    if (active.has(id)) fail('RECIPE_DEPENDENCY', 'Asset recipes contain a dependency cycle.');
+    if (visited.has(id)) return;
+    active.add(id); for (const dependency of nextAssets.find(a => a.recipe.assetId === id)!.recipe.dependencies) visit(dependency);
+    active.delete(id); visited.add(id);
+  };
+  for (const asset of nextAssets) visit(asset.recipe.assetId);
+  for (const s of episode.segments) {
+    for (const ref of s.references) {
+      const asset = nextAssets.find(a => a.recipe.assetId === ref.assetId);
+      if (!asset) fail('MISSING_RECIPE', `Missing recipe for ${ref.assetId}.`);
+      if (asset.recipe.kind === 'narration') fail('ASSET_ROLE', 'Use the narration field to bind audio; image references keep their original order.');
+    }
+    if (s.narration && nextAssets.find(a => a.recipe.assetId === s.narration!.assetId)?.recipe.kind !== 'narration') fail('MISSING_RECIPE', `Declare a narration recipe for segment ${s.id}.`);
+  }
+  const episodes = previous ? story.episodes.map(e => e.id === episode.id ? episode : e) : [...story.episodes, episode];
+  return { ...story, episodes, assets: nextAssets };
+}
+export async function importStory(root: string, value: unknown, replace = false, expectedPrevious?: string | null): Promise<Story> {
+  const draft = parse(ImportDraft, value);
+  const normalized = normalizeImportDraft(draft, await readStable(resolve(draft.source)));
+  const { raw, text, rawHash, textHash, episode } = normalized;
   return withProjectLock(root, async () => {
-    const story = await loadStory(root);
-    const previous = story.episodes.find(e => e.id === episode.id);
-    if (previous && canonicalSha256(previous) !== canonicalSha256(episode) && !replace) fail('EPISODE_EXISTS', 'Episode differs; use explicit replacement or a new episode id.');
-    const nextAssets = [...story.assets];
-    for (const recipe of draft.recipes) {
-      const previousAsset = nextAssets.find(a => a.recipe.assetId === recipe.assetId);
-      const recipeHash = canonicalSha256(recipe);
-      if (previousAsset && previousAsset.recipeHash !== recipeHash) fail('RECIPE_CONFLICT', `Asset ${recipe.assetId} has a different recipe; use a new asset id.`);
-      if (!previousAsset) nextAssets.push({ recipe, recipeHash, media: null });
+    const story = await loadStory(root), previous = story.episodes.find(e => e.id === episode.id);
+    const actual = previous ? canonicalSha256(previous) : null;
+    if (expectedPrevious !== undefined && actual !== expectedPrevious && actual !== canonicalSha256(episode)) {
+      fail('IMAGE_PREPARATION_STALE', 'Episode changed since preparation; preserve the new content and the preparation.');
     }
-    for (const asset of nextAssets) {
-      if (asset.recipe.kind === 'narration' && (asset.recipe.dependencies.length || asset.recipe.exactText.length)) fail('RECIPE_DEPENDENCY', 'Narration is an existing voice reference, not an image generation recipe.');
-      if (asset.recipe.dependencies.some(id => nextAssets.find(a => a.recipe.assetId === id)?.recipe.kind === 'narration')) fail('RECIPE_DEPENDENCY', 'Image recipes cannot depend on narration audio.');
-      if (new Set(asset.recipe.dependencies).size !== asset.recipe.dependencies.length || asset.recipe.dependencies.some(id => !nextAssets.some(a => a.recipe.assetId === id) || id === asset.recipe.assetId)) fail('RECIPE_DEPENDENCY', 'Recipe dependencies must uniquely reference other declared assets.');
-    }
-    const visited = new Set<string>(), active = new Set<string>();
-    const visit = (id: string) => {
-      if (active.has(id)) fail('RECIPE_DEPENDENCY', 'Asset recipes contain a dependency cycle.');
-      if (visited.has(id)) return;
-      active.add(id); for (const dependency of nextAssets.find(a => a.recipe.assetId === id)!.recipe.dependencies) visit(dependency);
-      active.delete(id); visited.add(id);
-    };
-    for (const asset of nextAssets) visit(asset.recipe.assetId);
-    for (const s of episode.segments) {
-      for (const ref of s.references) {
-        const asset = nextAssets.find(a => a.recipe.assetId === ref.assetId);
-        if (!asset) fail('MISSING_RECIPE', `Missing recipe for ${ref.assetId}.`);
-        if (asset.recipe.kind === 'narration') fail('ASSET_ROLE', 'Use the narration field to bind audio; image references keep their original order.');
-      }
-      if (s.narration && nextAssets.find(a => a.recipe.assetId === s.narration!.assetId)?.recipe.kind !== 'narration') fail('MISSING_RECIPE', `Declare a narration recipe for segment ${s.id}.`);
-    }
-    const episodes = previous ? story.episodes.map(e => e.id === episode.id ? episode : e) : [...story.episodes, episode];
+    const { episodes, assets: nextAssets } = mergeImport(story, normalized, replace);
     if (canonicalSha256({ episodes, assets: nextAssets }) === canonicalSha256({ episodes: story.episodes, assets: story.assets })) {
       let intact = false;
       try {

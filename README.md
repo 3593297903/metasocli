@@ -224,3 +224,6 @@ node E:\metasocli\dist\cli\main.js generate --root <story> --plan <planId> --seg
 ```
 
 旧请求可能受理并重复计费，旧未知继续占位；重复上述同一命令只沿用一个稳定新尝试。waiting_capacity 表示待空位，不是失败或已生成。完整状态、四并发衔接与范围约束见 [视频显式重试](docs/VIDEO_UNKNOWN_RETRY.md)，另一设备版本要求见 [修复构建部署](docs/NEW_DEVICE_RETRY_BUILD.md)。
+# 图片固定准备/结果交接增量（2026-11-02）
+
+本地开发入口新增 `images prepare --root <story> --batch <image-batch.json>` 与 `images collect --root <story> --preparation <id>`，原 `images run/status/resume/retry` 可加 `--summary`。完整命令、清单与恢复说明见 [图片 API 用法](docs/IMAGE_API_USAGE.md#固定准备与结果收集2026-11-02)。prepare/collect 只做本地校验和证据交接，不发起网络或收费调用；运行仍沿用原授权。旧故事与旧正式计划无需迁移，原命令继续可用。

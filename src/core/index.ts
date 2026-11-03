@@ -18,3 +18,5 @@ export { YicImageClient } from '../images/client.js';
 export { readImagePlan, readImageJob, listImageJobs } from '../images/store.js';
 export type { ImageClient } from '../images/client.js';
 export type { ImageDependencies } from '../images/run.js';
+export { prepareImages } from '../images/preparation.js';
+export { collectImages, imageSummary } from '../images/reporting.js';

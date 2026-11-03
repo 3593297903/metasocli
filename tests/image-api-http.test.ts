@@ -36,7 +36,8 @@ it('receives 200 complete HTTP request bodies before any success; all 200 bodies
     const story=await loadStory(f.root);for(const asset of story.assets)expect(asset.media?.sha256).toBe(sha256Hex(images.get(asset.recipe.assetId)!));
     expect(story.episodes[0]!.segments.every(s=>s.duration===7&&s.targetDurationSeconds===6.666)).toBe(true);
     const before=story.revision;let reposts=0;await runImages(f.root,plan.planId,false,{client:{async create(){reposts++;throw Error('Duplicate POST');}}});expect(reposts).toBe(0);expect((await loadStory(f.root)).revision).toBe(before);
-    const evidence=resolve('.work/image-api-20260924/200-arrivals.json');await mkdir(resolve('.work/image-api-20260924'),{recursive:true});
+    const folder=resolve(process.env.METASO_TEST_EVIDENCE_DIR??'.work/image-api-20260924');
+    const evidence=resolve(folder,'200-arrivals.json');await mkdir(folder,{recursive:true});
     await writeFile(evidence,JSON.stringify({offline:true,providerCapacityVerified:false,total:200,allStreamsBeforeDecode:true,releaseAt,firstResponse,arrivals,completionOrder:completed,registered:result.summary.registered,reposts,storyRevision:before},null,2));
   }finally{clearTimeout(deadline);server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()));}
 },420000);

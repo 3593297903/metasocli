@@ -26,12 +26,23 @@ function dead(pid: number): boolean {
   try { process.kill(pid, 0); return false; } catch (e) { return isCode(e, 'ESRCH'); }
 }
 export async function liveLease(file: string): Promise<z.infer<typeof Owner> | undefined> {
-  try { await safePath(file); }
-  catch (error) { if (isCode(error, 'ENOENT') && !await exists(file)) return undefined; throw error; }
-  if (!await exists(file)) return undefined;
-  let record;
-  try { record = await owner(file); } catch (error) { if (!await exists(file)) return undefined; throw error; }
-  return record.host === hostname() && dead(record.pid) ? undefined : record;
+  for (let observation = 0; ; observation++) {
+    try { await safePath(file); }
+    catch (error) { if (isCode(error, 'ENOENT') && !await exists(file)) return undefined; throw error; }
+    if (!await exists(file)) return undefined;
+    let record;
+    try { record = await owner(file); }
+    catch (error) {
+      if (!await exists(file)) return undefined;
+      // The observed file disappeared before open, but another now exists.
+      // Revalidate that replacement from the root; never reuse the old token or
+      // retry path-check failures here. Acquisition/recovery/deletion are unchanged.
+      if (!isCode(error, 'ENOENT') || observation >= 4) throw error;
+      await new Promise(resolve => setTimeout(resolve, 25));
+      continue;
+    }
+    return record.host === hostname() && dead(record.pid) ? undefined : record;
+  }
 }
 export interface Lease { token: string; assertOwned(): Promise<void>; release(): Promise<void> }
 export async function acquireLease(file: string, recovery = `${file}.recovery`): Promise<Lease> {

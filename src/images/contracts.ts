@@ -2,8 +2,8 @@ import { z } from 'zod';
 import { Hash, Id, RelativePath } from '../contracts/story.js';
 
 export const IMAGE_ORIGIN = 'https://api.yiciyuang.com';
-export const IMAGE_GENERATION_TIMEOUT_MS = 300000;
-export const Size = z.enum(['1024x1024', '1536x1024', '1024x1536', '1920x1088', '1088x1920', '2048x2048', '2560x1707', '1707x2560', '4096x4096']);
+export const IMAGE_GENERATION_TIMEOUT_MS = 600000;
+export const Size = z.enum(['1024x1024', '1536x1024', '1024x1536', '1920x1088', '1088x1920', '2048x2048', '2560x1440', '2560x1707', '1707x2560', '4096x4096']);
 export const ImageProfile = z.object({
   backend: z.literal('api').default('api'), provider: z.literal('yiciyuang').default('yiciyuang'),
   origin: z.literal(IMAGE_ORIGIN).default(IMAGE_ORIGIN), model: z.literal('gpt-image-2.5').default('gpt-image-2.5'),
@@ -13,7 +13,7 @@ export const ImageProfile = z.object({
   providerLimits: z.object({ concurrent: z.number().int().positive().optional(), rpm: z.number().int().positive().optional(),
     batch: z.number().int().positive().optional(), source: z.string().min(1).max(2000), checkedAt: z.iso.datetime() }).strict().optional(),
   downloadConcurrency: z.number().int().min(1).max(16).default(2), decodeConcurrency: z.number().int().min(1).max(8).default(2),
-  // Accept longer legacy plan values without changing their hashes; the client caps the effective deadline.
+  // Keep frozen plan values/hashes intact; the client adapts the legacy default and caps the effective deadline.
   registrationConcurrency: z.literal(1).default(1), generationTimeoutMs: z.number().int().min(1000).max(3600000).default(IMAGE_GENERATION_TIMEOUT_MS),
   automaticPostRetries: z.literal(0).default(0), quotaGroup: Id.default('yiciyuang-default'),
   maxResponseBytes: z.number().int().min(1024).max(45*1024*1024).default(45*1024*1024),

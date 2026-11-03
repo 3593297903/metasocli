@@ -28,8 +28,8 @@ SPEC.loader.exec_module(handoff)
 def test_directory():
     # Python 3.14's Windows private temp ACL excludes the sandbox's restricted SID.
     # Inherit this workspace's ACL and only remove this run's exact UUID directory.
-    base = ROOT / ".work"
-    base.mkdir(exist_ok=True)
+    base = Path(os.environ.get("METASO_TEST_EVIDENCE_DIR", ROOT / ".work"))
+    base.mkdir(parents=True, exist_ok=True)
     target = base / f"image-skill-test-{uuid.uuid4()}"
     target.mkdir()
     try:
@@ -93,6 +93,18 @@ def result_fixture(recipe, root: Path):
 
 
 class ImageHandoffTests(unittest.TestCase):
+    def test_all_project_entries_reach_one_fixed_workflow_without_changing_templates(self):
+        shared = ROOT / "skills/metasocli-reference-images/references/image-workflow.md"
+        text = shared.read_text(encoding="utf-8")
+        for command in ("images prepare", "images run", "images collect", "submit_unknown"):
+            self.assertIn(command, text)
+        for name in ("metasocli", "metasocli-prompt-engine", "metasocli-video-prompts", "metasocli-video-prompts-旁白", "metasoclitk", "metasocli-reference-images"):
+            body = (ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("references/image-workflow.md", body)
+        tk = (ROOT / "skills/metasoclitk/SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("references/character-board.md", tk)
+        self.assertIn("不自动附加统一旁白", tk)
+
     def test_full_templates_transfer_without_touching_narration(self):
         request, recipe, draft = fixture()
         draft["recipes"].append({"assetId": "voice", "kind": "narration", "prompt": "用户旁白参考。", "dependencies": [], "exactText": []})

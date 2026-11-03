@@ -13,5 +13,9 @@ description: 基于完整剧本制作保留原文、完整台词和素材身份�
 - 按 [图片交接契约](../metasocli-reference-images/references/handoff-contract.md) 保存结构化请求，调用 [参考图片 Skill](../metasocli-reference-images/SKILL.md) 第一阶段形成完整类型模板配方，原样映射到草稿 recipes，保留精确文字及有序依赖。禁止把模板摘要成几句。
 - `references` 数组就是请求图序。参考图最多 9 张；首帧恰好 1 张且不能混合参考图或旁白音频。尾帧、视频参考未开放；统一旁白参考由独立旁白入口处理，不进入图片交接。
 - 用本地 `{{ref:assetId}}` 指示确切引用，不要按姓名做全局替换。H3 请求固定 MiniMax-H3，768P 或 2K；不能带入旧模型的 480p、节点标记或其他执行开关。
-- 保存完整草稿，再执行 CLI import 和 plan 验证。程序校验不代替对叙事与时长的人工判断；不要宣称通过校验就保证模型逐字还原台词。
+- 保存完整草稿，交给共用 images prepare 完成图片交接校验与导入；素材准备后沿原入口执行视频 plan 验证。程序校验不代替对叙事与时长的人工判断；不要宣称通过校验就保证模型逐字还原台词。
 - 新草稿段参数 `contextIr` 明确为 true；视频入口使用 `plan --workflow h3-inline-ir`，实际视频 JSON 请求启用 `context_ir_enabled:true`，不先执行独立 IR 改写。
+
+## 固定图片工作流
+
+完整读取并执行 [共用 prepare/run/collect 流程](../metasocli-reference-images/references/image-workflow.md)。API 图片先完成本入口必要的原文分析与完整配方，再用一次 `images prepare` 校验全部交接、逐集导入并冻结同一计划；沿用原授权执行 `images run --summary`，用 `images collect` 收集真实结果。已有正式计划直接复用或恢复，不强制补准备记录，不反复现场编写机械执行脚本。该接入不改变本入口模板、图片顺序、旁白判断或音频登记；未知和部分结果准确返回，未授权收费阶段前停止。

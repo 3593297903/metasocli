@@ -2,7 +2,13 @@ import { lstat, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { fail, isCode } from '../core/errors.js';
-import { sameFileIdentity } from './file-identity.js';
+import { hasUsableFileIdentity, sameFileIdentity } from './file-identity.js';
+
+// Private marker: only the narrowly identified realpath failure may request a
+// complete recheck. Preserve the original filesystem error if the budget expires.
+class RecheckLeafRealpath extends Error {
+  constructor(readonly original: unknown) { super('Recheck the complete file path.', { cause: original }); }
+}
 
 const oldNames = new Set(['.story2libtv', '.story2libtv-runtime', '.story2libtv-work', '.libtv',
   'story-to-libtv', 'video-prompt-to-libtv', 'seedance-segment-prompt-engine', 'story-reference-image-builder']);
@@ -22,8 +28,9 @@ export async function safePath(input: string): Promise<string> {
   for (let attempt = 0; ; attempt++) {
     try { return await inspectPath(input); }
     catch (error) {
-      if (!isCode(error, 'PATH_CHANGED') || attempt >= 4) throw error;
-      await new Promise(resolve => setTimeout(resolve, 5));
+      const leafError = error instanceof RecheckLeafRealpath;
+      if (attempt >= 4 || (!leafError && !isCode(error, 'PATH_CHANGED'))) throw leafError ? error.original : error;
+      await new Promise(resolve => setTimeout(resolve, leafError ? 25 : 5));
     }
   }
 }
@@ -42,7 +49,12 @@ async function inspectPath(input: string): Promise<string> {
     if (info.isSymbolicLink()) fail('LINK_PATH', 'Symbolic links and directory junctions are not writable project paths.');
     let real: string;
     try { real = await realpath(current); }
-    catch (error) { if (isCode(error, 'ENOENT')) fail('PATH_CHANGED', 'Path disappeared during validation; revalidate its current identity.'); throw error; }
+    catch (error) {
+      if (isCode(error, 'ENOENT')) fail('PATH_CHANGED', 'Path disappeared during validation; revalidate its current identity.');
+      if (process.platform === 'win32' && isCode(error, 'EPERM') && current === full
+        && info.isFile() && info.nlink === 1n && hasUsableFileIdentity(info)) throw new RecheckLeafRealpath(error);
+      throw error;
+    }
     if (key(real) !== key(current)) {
       const after = await lstat(current, { bigint: true }).catch(error => { if (isCode(error, 'ENOENT')) return undefined; throw error; });
       // An unlinked/replaced Windows file may report its former path while the

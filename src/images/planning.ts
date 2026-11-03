@@ -20,19 +20,9 @@ export async function loadImageProfile(file?:string):Promise<Profile> {
 }
 export interface ImageScope {episodes?:string[];selection?:unknown;assets?:string[];allEpisodes?:boolean;profile?:unknown;submissionMode?:string;restartOf?:string}
 const binding=(episodeId:string,s:Story['episodes'][number]['segments'][number])=>({episodeId,segmentId:s.id,hash:canonicalSha256(s)});
-export async function createImagePlan(root:string,input:ImageScope) {
-  if([input.episodes!==undefined,input.selection!==undefined,input.assets!==undefined,input.allEpisodes===true].filter(Boolean).length!==1) fail('IMAGE_SCOPE','Select exactly one ordered image scope.');
-  if(input.submissionMode!==undefined&&input.submissionMode!=='all-ready')fail('IMAGE_MODE','Only all-ready image submission is supported.');
-  const profile=parse(ImageProfile,input.profile??await loadImageProfile());
-  return withProjectWrite(root,async()=>{
-    const story=await loadStory(root),jobs=await listImageJobs(root);
-    const restart=input.restartOf?await readImagePlan(root,input.restartOf):undefined;
-    const restartAncestors=new Set<string>();
-    for(let ancestor=restart;ancestor;ancestor=ancestor.restartOf?await readImagePlan(root,ancestor.restartOf):undefined){
-      if(restartAncestors.has(ancestor.planId)||ancestor.projectId!==story.projectId)fail('IMAGE_RESTART_INVALID','Image restart ancestry is cyclic or crosses project identity.');
-      restartAncestors.add(ancestor.planId);
-    }
-    if(restart&&(restart.projectId!==story.projectId||!await readImageRun(root,restart)))fail('IMAGE_RESTART_INVALID','Restart requires an existing authorized image plan in this story.');
+/** Shared ordered scope/dependency validation; preparation can preflight without writes. */
+export function selectImageAssets(story:Story,input:ImageScope) {
+  if([input.episodes!==undefined,input.selection!==undefined,input.assets!==undefined,input.allEpisodes===true].filter(Boolean).length!==1)fail('IMAGE_SCOPE','Select exactly one ordered image scope.');
     let scope:ImagePlanRecord['scope']=[];const seeds:string[]=[];
     if(input.assets) {
       const ids=parse(z.array(Id).min(1).max(2000),input.assets);if(new Set(ids).size!==ids.length)fail('IMAGE_SCOPE','Repeated asset IDs.');seeds.push(...ids);
@@ -54,6 +44,27 @@ export async function createImagePlan(root:string,input:ImageScope) {
     function use(id:string,b:ImagePlanRecord['scope'][number]){if(!visited.has(id))return;const rows=required.get(id)??[];if(!rows.some(r=>r.episodeId===b.episodeId&&r.segmentId===b.segmentId))rows.push(b);required.set(id,rows);
       story.assets.find(a=>a.recipe.assetId===id)!.recipe.dependencies.forEach(dep=>use(dep,b));}
     for(const b of scope)story.episodes.find(e=>e.id===b.episodeId)!.segments.find(s=>s.id===b.segmentId)!.references.forEach(r=>use(r.assetId,b));
+  return {scope,ordered,required};
+}
+export interface ImagePlanPersistence {
+  planId:string;
+  beforeWrite(plan:ImagePlanRecord):Promise<void>;
+  afterWrite?(plan:ImagePlanRecord):Promise<void>;
+}
+export async function createImagePlan(root:string,input:ImageScope,persistence?:ImagePlanPersistence) {
+  if([input.episodes!==undefined,input.selection!==undefined,input.assets!==undefined,input.allEpisodes===true].filter(Boolean).length!==1) fail('IMAGE_SCOPE','Select exactly one ordered image scope.');
+  if(input.submissionMode!==undefined&&input.submissionMode!=='all-ready')fail('IMAGE_MODE','Only all-ready image submission is supported.');
+  const profile=parse(ImageProfile,input.profile??await loadImageProfile());
+  return withProjectWrite(root,async()=>{
+    const story=await loadStory(root),jobs=await listImageJobs(root);
+    const restart=input.restartOf?await readImagePlan(root,input.restartOf):undefined;
+    const restartAncestors=new Set<string>();
+    for(let ancestor=restart;ancestor;ancestor=ancestor.restartOf?await readImagePlan(root,ancestor.restartOf):undefined){
+      if(restartAncestors.has(ancestor.planId)||ancestor.projectId!==story.projectId)fail('IMAGE_RESTART_INVALID','Image restart ancestry is cyclic or crosses project identity.');
+      restartAncestors.add(ancestor.planId);
+    }
+    if(restart&&(restart.projectId!==story.projectId||!await readImageRun(root,restart)))fail('IMAGE_RESTART_INVALID','Restart requires an existing authorized image plan in this story.');
+    const {scope,ordered,required}=selectImageAssets(story,input);
     const items:ImagePlanItem[]=[];
     for(const id of ordered){const asset=story.assets.find(a=>a.recipe.assetId===id)!,recipe=asset.recipe;
       if(recipe.kind==='narration')continue;
@@ -78,8 +89,13 @@ export async function createImagePlan(root:string,input:ImageScope) {
       const identity={assetId:id,kind:recipe.kind,recipeHash:asset.recipeHash,promptHash,promptPath,dependencies:recipe.dependencies,dependencySources,targetHash:asset.media?.sha256??null,size,requiredBy:required.get(id)??[]};
       items.push({...identity,fingerprint:canonicalSha256({identity,profile}),action,...(reason?{reason}:{}),...(operationId?{operationId}:{}),...(retryOf?{retryOf}:{})});
     }
-    const base={schemaVersion:1 as const,planId:randomUUID(),projectId:story.projectId,createdAt:new Date().toISOString(),revisionAtCreation:story.revision,...(restart?{restartOf:restart.planId}:{}),profile,scope,items};
-    const plan=parse(ImagePlan,{...base,planHash:canonicalSha256(base)});await writeJson(await imagePath(root,'image-plans',plan.planId),plan);
+    const base={schemaVersion:1 as const,planId:persistence?parse(z.uuid(),persistence.planId):randomUUID(),projectId:story.projectId,createdAt:new Date().toISOString(),revisionAtCreation:story.revision,...(restart?{restartOf:restart.planId}:{}),profile,scope,items};
+    const plan=parse(ImagePlan,{...base,planHash:canonicalSha256(base)});
+    const file=await imagePath(root,'image-plans',plan.planId);
+    if(await exists(file))fail('IMAGE_PLAN_CONFLICT','Reserved plan ID already exists; recover its original intent.');
+    await persistence?.beforeWrite(plan);
+    await writeJson(file,plan);
+    await persistence?.afterWrite?.(plan);
     return {plan,summary:imagePlanSummary(plan)};
   });
 }
@@ -113,4 +129,23 @@ export async function effectiveImageInput(root:string,plan:ImagePlanRecord,item:
   }
   return {provider:plan.profile.provider,origin:plan.profile.origin,route:references.length?'/v1/images/edits':'/v1/images/generations',model:plan.profile.model,quality:plan.profile.quality,
     size:item.size,n:1,response_format:plan.profile.response_format,promptPath:item.promptPath,promptHash:item.promptHash,references};
+}
+
+/** Complete only the exact previously persisted intent. Never construct a second plan on recovery. */
+export async function restoreImagePlanIntent(root:string,value:unknown,check:()=>Promise<void>) {
+  const plan=parse(ImagePlan,value),{planHash,...base}=plan;
+  if(canonicalSha256(base)!==planHash)fail('IMAGE_PLAN_TAMPERED','Prepared plan intent hash mismatch.');
+  return withProjectWrite(root,async()=>{
+    await check();await validateImagePlan(root,plan);
+    const file=await imagePath(root,'image-plans',plan.planId);
+    if(await exists(file)) {
+      if(canonicalSha256(await readImagePlan(root,plan.planId))!==canonicalSha256(plan))fail('IMAGE_PLAN_CONFLICT','Formal plan differs from the preserved intent.');
+    } else {
+      const story=await loadStory(root);
+      if(plan.items.some(item=>(story.assets.find(a=>a.recipe.assetId===item.assetId)?.media?.sha256??null)!==item.targetHash))
+        fail('IMAGE_PLAN_STALE','An image target changed before the prepared plan was persisted.');
+      await writeJson(file,plan);
+    }
+    return plan;
+  });
 }

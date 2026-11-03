@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "projectId": "00000000-0000-4000-8000-000000000001",
+  "entries": [
+    {
+      "episodeId": "ep-01",
+      "draftPath": ".metasocli/drafts/ep-01/draft.json",
+      "requestPath": ".metasocli/drafts/ep-01/reference-image-request.json",
+      "recipePath": ".metasocli/drafts/ep-01/reference-image-recipe.json",
+      "replace": false
+    }
+  ],
+  "scope": { "episodes": ["ep-01"] },
+  "profilePath": null
+}

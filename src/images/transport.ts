@@ -2,7 +2,11 @@ import { Dispatcher, getGlobalDispatcher } from 'undici';
 import { fail } from '../core/errors.js';
 import { IMAGE_GENERATION_TIMEOUT_MS } from './contracts.js';
 
-export const effectiveImageTimeout = (configuredMs: number): number => Math.min(configuredMs, IMAGE_GENERATION_TIMEOUT_MS);
+const LEGACY_IMAGE_GENERATION_TIMEOUT_MS = 300000;
+// Apply the requested 300s -> 600s upgrade to frozen plans without rewriting
+// their identity. Other explicit shorter deadlines retain their meaning.
+export const effectiveImageTimeout = (configuredMs: number): number =>
+  configuredMs === LEGACY_IMAGE_GENERATION_TIMEOUT_MS ? IMAGE_GENERATION_TIMEOUT_MS : Math.min(configuredMs, IMAGE_GENERATION_TIMEOUT_MS);
 
 /** Request-local timeouts; keep the existing connection/proxy dispatcher intact. */
 class ImageDispatcher extends Dispatcher {

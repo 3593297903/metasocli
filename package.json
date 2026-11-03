@@ -16,6 +16,9 @@
     "test:image-skill": "python -X utf8 -B tests/reference_image_skill_test.py",
     "test:image-api": "vitest run tests/image-api.test.ts tests/image-api-http.test.ts tests/image-api-boundaries.test.ts tests/image-transport.test.ts --pool=threads",
     "test:image-api:process": "node scripts/image-api-process-smoke.mjs",
+    "test:image-workflow": "vitest run tests/image-workflow.test.ts tests/image-workflow-recovery.test.ts --pool=threads",
+    "test:image-workflow:process": "node scripts/image-workflow-process-smoke.mjs",
+    "benchmark:image-workflow": "node scripts/image-workflow-benchmark.mjs",
     "check": "npm run build && npm test",
     "prepack": "npm run build"
   },
