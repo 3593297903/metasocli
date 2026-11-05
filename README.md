@@ -1,5 +1,7 @@
 # metasocli
 
+最新源码快照与恢复标签见 [2026-11-05 版本记录](docs/VERSION_SNAPSHOT_20261105.md)；请用标签或完整提交号区分同为 `0.1.0` 的不同源码版本。
+
 独立的 Node.js / TypeScript CLI，将完整剧本或成品视频提示词整理为 Metaso `MiniMax-H3` 请求计划，并管理提交、查询、恢复及视频下载。当前版本 **0.1.0**。2026-09-21 起默认视频请求明确启用 `context_ir_enabled:true`；本次切换只做离线验证，没有发起付费生成。
 
 当前源码包含视频四并发持续补位、独立下载，以及 Windows 路径大小写和已完成项目归档的恢复修复。详见 [批次实施报告](docs/VIDEO_BATCH_CONCURRENCY_IMPLEMENTATION_REPORT.md) 与 [独立复核](docs/VIDEO_BATCH_CONCURRENCY_RECHECK.md)。

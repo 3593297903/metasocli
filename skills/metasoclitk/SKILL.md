@@ -5,6 +5,8 @@ description: 沿用 metasocli 成品视频提示词流程，以 jianc 风格的�
 
 # metasoclitk
 
+开始执行就完整读取 [已有图片授权与提交上下文](../../docs/IMAGE_EXECUTION_AUTHORIZATION.md)，不要等到付费提交被拒绝后才读取。用户已要求的当前图片范围直接沿用已有发送授权，实际工具调用明确带上授权来源、目的地和冻结范围；正常审批仍适用。本入口的视频授权规则另行保留。
+
 这是 `metasocli-video-prompts` 的独立资产图风格入口。保留原文导入、段落与素材对应、图片 API、登记、视频计划、生成和恢复流程；为新准备的 `character`、`scene`、`prop` 配方应用本技能的 jianc 通用设计板规则。运行所需规则已在本包内，不需要读取 jianc 项目、其原片、示例人物或已有图片。
 
 ## 安装目录与跨设备使用
@@ -22,7 +24,7 @@ description: 沿用 metasocli 成品视频提示词流程，以 jianc 风格的�
    - `prop`：[道具结构材质板](references/prop-board.md)。
    - `first_frame`：继续使用原 [单幅首帧规则](../metasocli-reference-images/references/first-frame.md)，不把多格设计板当作首帧。
 3. 本入口新准备的人物、场景、道具配方只采用上述新模板的风格、布局及内容组织方法。不要执行共用图片技能要求读取旧三类类型模板的步骤，也不把旧模板或默认写实摄影描述拼入配方；共用技能保留的原文事实、资产身份、完整配方传递及技术校验规则继续适用。每项资产直接形成一份新模板配方并提交一次，不先按旧模板生成一张再转成新类型。用户当前明确指定的风格或素材优先。视频原文、人物身份和剧情事实保持原样，不向视频正文追加或替换美术风格。
-4. 一项资产生成一份独立完整提示词。将本故事具体外观、完整板式、实际标题与资料、各视图标签、材质、光影和连续性要求展开，不只写“按 jianc 模板”。按原契约保存 request/recipe 并校验；将完整 `generationPrompt` 原样映射到草稿 `recipes[].prompt`。事实保留在 `sourceFacts`，生成设定在 `visualDescription` 中明确区分；不增加契约不支持的 JSON 字段。
+4. 一项资产生成一份独立完整提示词。将本故事具体外观、完整板式、实际标题与资料、各视图标签、材质、光影和连续性要求展开，不只写“按 jianc 模板”。基础文本定稿后、保存哈希和交接之前，完整执行 [按 kind 追加原文](../metasocli-reference-images/references/denoise-policy.md)：以 entrySkill=metasoclitk 调用包内 append_asset_denoise.py compose/check，character/scene/prop 各只追加对应全文一次并放在末尾；这是共享技术尾段，jianc 三类模板仍完整使用，不叠加所继承入口的第二份。按原契约保存 request/recipe 并校验；将工具输出的完整 `prompt` 同时写入 `generationPrompt` 和草稿 `recipes[].prompt`，使用追加后的 recipeSha256。事实保留在 `sourceFacts`，生成设定在 `visualDescription` 中明确区分；不增加契约不支持的 JSON 字段。first_frame、旁白与旧配方/计划恢复不追加。
 5. 收齐本次全部集/段的配方及交接，调用共用 images prepare/run/collect，再沿原图片流程使用 `api / gpt-image-2.5 / all-ready`。读取实际计划确认人物、场景、道具的默认请求尺寸为 `1920x1088`；若安装配置不同，为本次计划传入支持的显式 profile，不修改全局默认。当前用户明确更高规格时按原图片文档匹配实际 size。`built_in` 仅在用户明确选择时使用，已有真实参考图依赖按原顺序传入。缺少图片 Key 时继续离线准备与计划。
 6. 原样执行原技能的首次图片保存、技术校验、正式登记及结果交接，不增加审美评分、OCR、自动重画或逐图批准。必要素材 ready 后，返回原入口创建 `h3-inline-ir` 计划和最多4段持续补位的视频批次，实际请求保持 `context_ir_enabled:true`。恢复、一次性重试与图片/视频阶段互斥均使用原正式入口。
 

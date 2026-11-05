@@ -11,11 +11,11 @@ export const PreparationScope=z.union([
 ]);
 export const ImageBatch=z.object({schemaVersion:z.literal(1),projectId:z.uuid(),
   entries:z.array(z.object({episodeId:Id,draftPath:InputPath,requestPath:InputPath,recipePath:InputPath,replace:z.boolean().default(false)}).strict()).min(1).max(2000),
-  scope:PreparationScope,profilePath:InputPath.nullable().default(null),
+  scope:PreparationScope,profilePath:InputPath.nullable().default(null),restartOf:z.uuid().optional(),
 }).strict();
 export const SnapshotFile=z.object({path:RelativePath,sha256:Hash}).strict();
 export const PreparationInput=z.object({schemaVersion:z.literal(1),workflowVersion:z.literal(1),preparationId:z.uuid(),planId:z.uuid(),projectId:z.uuid(),
-  inputFingerprint:Hash,contentFingerprint:Hash,createdAt:z.iso.datetime(),validatorHash:Hash,profile:ImageProfile,scope:PreparationScope,
+  inputFingerprint:Hash,contentFingerprint:Hash,createdAt:z.iso.datetime(),validatorHash:Hash,profile:ImageProfile,scope:PreparationScope,restartOf:z.uuid().optional(),
   entries:z.array(z.object({episodeId:Id,replace:z.boolean(),draft:SnapshotFile,request:SnapshotFile,recipe:SnapshotFile,source:SnapshotFile,
     sourceBasename:z.string().min(1).max(255),expectedEpisode:Episode,previousEpisodeHash:Hash.nullable()}).strict()).min(1).max(2000),hash:Hash,
 }).strict();

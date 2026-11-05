@@ -21,8 +21,8 @@ const hashRecord=<T extends object>(value:T)=>({...value,hash:canonicalSha256(va
 function verified<T extends {hash:string}>(value:T):T {
   const {hash,...base}=value;if(canonicalSha256(base)!==hash)fail('IMAGE_PREPARATION_TAMPERED','Preparation identity or hash changed. Preserve the record.');return value;
 }
-function identity(input:Pick<PreparationRecord,'projectId'|'scope'|'profile'|'entries'>){
-  return {projectId:input.projectId,scope:input.scope,profile:input.profile,entries:input.entries.map(e=>({episodeId:e.episodeId,replace:e.replace,
+function identity(input:Pick<PreparationRecord,'projectId'|'scope'|'profile'|'entries'|'restartOf'>){
+  return {projectId:input.projectId,scope:input.scope,profile:input.profile,...(input.restartOf?{restartOf:input.restartOf}:{}),entries:input.entries.map(e=>({episodeId:e.episodeId,replace:e.replace,
     draftHash:e.draft.sha256,requestHash:e.request.sha256,recipeHash:e.recipe.sha256,sourceHash:e.source.sha256,sourceBasename:e.sourceBasename}))};
 }
 async function readPreparationMetadata(root:string,id:string) {
@@ -134,7 +134,7 @@ async function snapshot(root:string,batchPath:string,validatorHash:string,timer:
     ...Object.fromEntries(['draft','request','recipe'].map(kind=>[kind,{path:`${dir}/inputs/${n}/${kind}.json`,sha256:sha256Hex(e.buffers[kind]!)}])),
     source:{path:`${dir}/inputs/${n}/source/${e.sourceBasename}`,sha256:sha256Hex(e.source)},sourceBasename:e.sourceBasename,
     expectedEpisode:e.expectedEpisode,previousEpisodeHash:e.previousEpisodeHash})) as PreparationRecord['entries'];
-  const base={projectId:gathered.batch.projectId,scope:gathered.batch.scope,profile:gathered.profile,entries};
+  const base={projectId:gathered.batch.projectId,scope:gathered.batch.scope,profile:gathered.profile,...(gathered.batch.restartOf?{restartOf:gathered.batch.restartOf}:{}),entries};
   const contentFingerprint=canonicalSha256(identity(base));
   const directory=await projectPath(root,'.metasocli/image-preparations');
   // The index is only a hint. Rebuild from immutable records; never use summary/index as validation.
@@ -198,7 +198,7 @@ export async function prepareImages(root:string,options:PrepareOptions):Promise<
         }
         if(state!.status==='ready'||await exists(await imagePath(root,'image-plans',input!.planId)))fail('IMAGE_PREPARATION_TAMPERED','Plan exists without its preparation intent.');
         await check();
-        return (await createImagePlan(root,{...input!.scope,profile:input!.profile,submissionMode:'all-ready'},{planId:input!.planId,
+        return (await createImagePlan(root,{...input!.scope,profile:input!.profile,submissionMode:'all-ready',...(input!.restartOf?{restartOf:input!.restartOf}:{})},{planId:input!.planId,
           async beforeWrite(plan){await check();await writeJson(intentPath,hashRecord({schemaVersion:1,preparationId:input!.preparationId,inputHash:input!.hash,inputFingerprint:input!.inputFingerprint,plan}));await options.checkpoint?.('plan-intent-saved');},
           async afterWrite(){await options.checkpoint?.('plan-saved');},
         })).plan;

@@ -46,3 +46,19 @@ it('freezes and sends 16:9 2K edits with the exact original image, registers mat
   await runImages(f.root, plan.planId, false, { client });
   expect(posts).toBe(1);
 });
+
+
+it('reuses exact registered originals without replacing or recovering a historical unknown request', async () => {
+  const f = await imageFixture();
+  const oldPlan = (await createImagePlan(f.root, { assets: f.ids, profile })).plan;
+  const runtimeRoot = join(f.root, 'runtime');
+  await runImages(f.root, oldPlan.planId, true, { runtimeRoot, client: { async create(): Promise<Response> { throw new Error('offline unknown'); } } });
+  const file = join(dirname(f.root), 'original-native.png');
+  await writeFile(file, png(1920, 1088));
+  await registerAsset(f.root, f.ids[0]!, { file, provenance: 'user' });
+  const next = (await createImagePlan(f.root, { assets: f.ids, profile: { ...profile, boardSize: '2560x1440' } })).plan;
+  expect(next.items[0]).toMatchObject({ action: 'reuse', targetHash: sha256Hex(png(1920, 1088)) });
+  expect(next.items[0]?.operationId).toBeUndefined();
+  const jobs = JSON.parse(await (await import('node:fs/promises')).readFile(join(f.root, '.metasocli/image-jobs', (await (await import('node:fs/promises')).readdir(join(f.root, '.metasocli/image-jobs')))[0]!), 'utf8'));
+  expect(jobs.status).toBe('submit_unknown');
+});

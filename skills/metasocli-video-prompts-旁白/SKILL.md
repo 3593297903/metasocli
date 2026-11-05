@@ -5,6 +5,8 @@ description: 沿用 metasocli 成品视频提示词流程，为明确含画外�
 
 # 成品视频提示词入口（统一旁白参考）
 
+开始执行就完整读取 [已有图片授权与提交上下文](../../docs/IMAGE_EXECUTION_AUTHORIZATION.md)，不要等到付费提交被拒绝后才读取。用户已要求的当前图片范围直接沿用已有发送授权，实际工具调用明确带上授权来源、目的地和冻结范围；正常审批仍适用。本入口的视频授权规则另行保留。
+
 本入口沿用原 `metasocli-video-prompts` 的内容、图片和视频请求内启用 Context IR 的流程，仅增加下文的旁白判断、音频登记和引用；原入口不会自动启用这份旁白。用户只需调用本技能并提供完整提示词，默认旁白文件已在当前安装中配置。选择本技能授权本地整理、参考素材准备和音频绑定；包含 IR 的视频生成须有覆盖本次范围及此模式的明确授权。
 
 完整读取用户指定的全部 UTF-8 TXT/Markdown。不要重新分镜、缩短台词或倒推剧本。DOCX/PDF 需由宿主先可靠提取并经用户任务范围认可；CLI 本版不直接解析这两种格式。提示词直接粘贴在消息中时，先完整保存为当前故事的 UTF-8 来源文件。
@@ -16,6 +18,8 @@ description: 沿用 metasocli 成品视频提示词流程，为明确含画外�
 统一分析全部素材，保存逐集图片交接请求：每个人物的固定造型、场景状态、关键连续性道具分别使用独立 assetId；只给实际出镜或明确需要该参考的段分配素材，不把一份全体人物合照绑定给每段。记录原文事实、生成设定、连续性、图片依赖和 requiredBySegments，具体结构见 [图片交接契约](../metasocli-reference-images/references/handoff-contract.md)。优先遵守用户明确指定的素材及引用。
 
 调用 [参考图片 Skill](../metasocli-reference-images/SKILL.md) 第一阶段，将完整人物/场景/道具/首帧模板落实为完整配方，校验后原样写入导入草稿，不能先写几句简化配方再生图。收齐本次全部范围的草稿和交接后，通过共用 images prepare 完成校验与导入，再沿原授权执行 API 全量提交与自动登记、images collect；仅在用户明确选择 built_in 时执行宿主生图阶段。复用准确 ready 素材，仅生成缺失必需项并正式登记。各阶段自动衔接，不要求用户另调图片技能或逐图批准。图片请求与图片依赖均排除 `kind: narration`；旁白录音继续由本入口单独登记，不交给生图工具。缺图不悄悄降级为纯文字，首帧不能与多参考图或旁白音频混用。仅缺少明确目标、无法解释的时长冲突或超出允许范围时报告准确段落；正常小数向上取整不是冲突，也不自动删减。
+
+在上述参考图片第一阶段，完整基础模板定稿后、哈希和导入之前，必须执行 [按 kind 追加原文](../metasocli-reference-images/references/denoise-policy.md)。使用包内 append_asset_denoise.py compose/check 一次处理本次全部新配方，entrySkill=metasocli-video-prompts-旁白；character、scene、prop 分别追加自己的原文全文，恰好一次且在末尾，再用同一最终文本填 generationPrompt/recipes[].prompt 并计算 recipeSha256。保留原模板，不叠加普通入口的第二份；first_frame、narration、旧 ready 图及旧计划恢复不追加。仅作用于新图片配方，旁白判断、cues、音频记录与视频原文保持原样；API/built_in 使用同一保存文本。
 
 ## 逐段、逐镜头判断旁白
 

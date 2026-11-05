@@ -5,6 +5,8 @@ description: 将成品视频提示词按原文导入 metasocli，准备素材和
 
 # 成品视频提示词入口
 
+开始执行就完整读取 [已有图片授权与提交上下文](../../docs/IMAGE_EXECUTION_AUTHORIZATION.md)，不要等到付费提交被拒绝后才读取。用户已要求的当前图片范围直接沿用已有发送授权，实际工具调用明确带上授权来源、目的地和冻结范围；正常审批仍适用。本入口的视频授权规则另行保留。
+
 完整读取用户指定的全部 UTF-8 TXT/Markdown。不要重新分镜、缩短台词或倒推剧本。DOCX/PDF 需由宿主先可靠提取并经用户任务范围认可；CLI 本版不直接解析这两种格式。
 
 读取 [草稿契约](../../docs/INPUT_FORMAT.md)。选择 `kind: video-prompts`。分段 `start/end` 是规范文本的 UTF-16 范围，必须按序覆盖全部正文；用程序计算，不手抄长正文或哈希。`duration` 可填原始目标秒数，例如 `12.378`；程序自动向上取整为 H3 实际请求的 13 秒，并在计划保留原始目标。正常小数适配不逐段询问、不改原文、不裁剪成片。单段可直接用 `import --file ... --kind video-prompts --episode ... --duration ...`。
@@ -24,6 +26,8 @@ description: 将成品视频提示词按原文导入 metasocli，准备素材和
 历史 false 计划需针对原始集重新 plan，不能手改旧计划或自动将 IR 副本集再增强。已有任务按原 taskId 查询、恢复和下载，不能因响应没返回 context_ir_enabled 而重发；程序不伪造返回字段。当前范围已获授权时自动继续，不逐段再问。
 
 批次恢复使用 `batch resume --root <story> --batch <batchId>`，它可继续原授权内未提交段；`batch status` 只读本地，旧 `resume --operation` 不创建新任务。复用已验证成片，下载失败只恢复下载。未显式确认的未知创建保留名额并停止新增，禁止用新批次/运行目录绕过；明确失败不自动重做，安全429重试受保存预算限制。已有独立 IR 副本不能自动进入 `--all-episodes`，范围不明时显式选择原始集和段。
+
+在上述参考图片第一阶段，完整基础模板定稿后、哈希和导入之前，必须执行 [按 kind 追加原文](../metasocli-reference-images/references/denoise-policy.md)。使用包内 append_asset_denoise.py compose/check 一次处理本次全部新配方，entrySkill=metasocli-video-prompts；character、scene、prop 分别追加自己的原文全文，恰好一次且在末尾，再用同一最终文本填 generationPrompt/recipes[].prompt 并计算 recipeSha256。保留全部原模板与事实，不默写、缩写或使用旧通用版本；first_frame、narration、旧 ready 图及旧计划恢复不追加。被 metasoclitk 或旁白入口继承时保留实际 entrySkill，不重复追加；API/built_in 使用同一保存文本。
 
 ## 图片后端统一选择
 

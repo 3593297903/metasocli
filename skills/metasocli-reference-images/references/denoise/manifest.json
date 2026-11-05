@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "policyVersion": "user-verbatim-by-kind-v1",
+  "encoding": "UTF-8 without BOM",
+  "lineEndings": "LF",
+  "terminalNewline": true,
+  "source": "2026-11-03 用户提供并确认的人物、场景、道具三段原文；前两项按正文含义纠正标题映射。",
+  "entries": [
+    {
+      "kind": "character",
+      "file": "character.txt",
+      "sha256": "fa0c6628aca1e371ffa5bf80657c3b46f14c065f4ba2683e68227d50b4145b71",
+      "bytes": 1840,
+      "utf16Units": 638
+    },
+    {
+      "kind": "scene",
+      "file": "scene.txt",
+      "sha256": "455836fe6522f6663028fbac36009d4d360dae04492a52a4ab1dad0a625199c2",
+      "bytes": 2053,
+      "utf16Units": 707
+    },
+    {
+      "kind": "prop",
+      "file": "prop.txt",
+      "sha256": "b334ee91c91ba678fde1a06c5520ac725e845964039e2093ec2568684ca505ac",
+      "bytes": 2430,
+      "utf16Units": 834
+    }
+  ]
+}

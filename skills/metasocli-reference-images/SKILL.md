@@ -5,6 +5,8 @@ description: 为 metasocli 按完整人物多视图、场景空间、道具结�
 
 # 参考图片准备
 
+开始执行就完整读取 [已有图片授权与提交上下文](../../docs/IMAGE_EXECUTION_AUTHORIZATION.md)，不要等到付费提交被拒绝后才读取。用户已要求的当前图片范围直接沿用已有发送授权，实际工具调用明确带上授权来源、目的地和冻结范围；正常审批仍适用。本技能不执行视频生成。
+
 由 `metasocli`、`metasocli-video-prompts` 或 `metasocli-video-prompts-旁白` 在同一任务中调用；也可以针对已有故事和明确的图片请求单独调用。图片后端默认使用 api（创艺坊 gpt-image-2.5），无需用户额外写“使用 API 生图”；当前任务明确指定的后端优先，built_in（宿主原生）仅在用户明确选择时使用。也可复用用户指定的现有图片。H3 只负责后续视频。所有模板、校验器和登记命令都来自本包，不读取旧 Skill、不调用 LibTV 补图。
 
 ## 素材边界与必读资料
@@ -38,6 +40,8 @@ python -B scripts/validate_handoff.py recipe <recipe.json> --request <request.js
 ```
 
 上面命令保留为手工诊断及 built_in 路径。API 主流程由 [固定图片工作流](references/image-workflow.md) 的 images prepare 调用同一 recipe 校验器（其中已包含 request/draft 核对）及原 import，不重复现场逐集编排。prepare 必须实际通过 Python 校验；缺 Python 时报告具体缺项，不假称完成。校验通过不代替对原文语义的完整阅读。
+
+只有上游为 metasoclitk、metasocli-video-prompts、metasocli-video-prompts-旁白时，在第一阶段新 planned 配方基础文本定稿后、保存提示词哈希/recipe/draft 与导入之前，完整执行 [按 kind 追加原文](references/denoise-policy.md)，用包内 append_asset_denoise.py 批量 compose/check。按 character/scene/prop 精确追加各自全文一次且置末尾，随后写入同一 generationPrompt/recipes[].prompt 和最终 recipeSha256。其他入口维持原默认；first_frame、narration、reused 和旧记录恢复不追加。各入口原完整模板继续使用，API 与明确选择的 built_in 都读取相同最终文本，不在发送时再追加。
 
 ## 后端选择与 API 全量提交
 

@@ -13,10 +13,11 @@ import { readImagePlan } from '../src/images/store.js';
 
 afterEach(cleanup);
 
-it.each([[300000,600000],[600000,600000],[900000,600000],[450000,450000]])('adapts frozen %i ms to %i ms without changing plan identity or transport',async(configuredMs,effectiveMs)=>{
+it.each<[number,number,('exact'|undefined)?]>([[300000,600000],[600000,600000],[900000,900000],[1200000,1200000],[1800000,1200000],[450000,450000],[300000,300000,'exact']])('adapts frozen %i ms to %i ms without changing plan identity or transport',async(configuredMs,effectiveMs,mode)=>{
   expect(ImageProfile.parse({}).generationTimeoutMs).toBe(600000);
+  expect(ImageProfile.parse({})).not.toHaveProperty('generationTimeoutMode');
   const f=await imageFixture(),previous=getGlobalDispatcher();
-  const {plan}=await createImagePlan(f.root,{episodes:['ep-1'],profile:{...profile,generationTimeoutMs:configuredMs},submissionMode:'all-ready'});
+  const {plan}=await createImagePlan(f.root,{episodes:['ep-1'],profile:{...profile,generationTimeoutMs:configuredMs,...(mode?{generationTimeoutMode:mode}:{})},submissionMode:'all-ready'});
   const deadlines:number[]=[],signalTimeout=AbortSignal.timeout.bind(AbortSignal);
   const signalSpy=vi.spyOn(AbortSignal,'timeout').mockImplementation(ms=>{deadlines.push(ms);return signalTimeout(ms);});
   const dispatchSpy=vi.spyOn(previous,'dispatch').mockImplementation(options=>{
@@ -32,10 +33,10 @@ it.each([[300000,600000],[600000,600000],[900000,600000],[450000,450000]])('adap
     });
     const result=await runImages(f.root,plan.planId,true,{client});
     expect(result.summary.registered).toBe(1);expect(calls).toBe(1);
-    expect(deadlines).toContain(effectiveMs);expect(deadlines).not.toContain(300000);
+    expect(deadlines).toContain(effectiveMs);if(effectiveMs!==300000)expect(deadlines).not.toContain(300000);
     expect(dispatchSpy).toHaveBeenCalledTimes(1);expect(getGlobalDispatcher()).toBe(previous);
     const saved=await readImagePlan(f.root,plan.planId);
-    expect(saved.planHash).toBe(plan.planHash);expect(saved.profile.generationTimeoutMs).toBe(configuredMs);
+    expect(saved.planHash).toBe(plan.planHash);expect(saved.profile.generationTimeoutMs).toBe(configuredMs);expect(saved.profile.generationTimeoutMode).toBe(mode);
   }finally{dispatchSpy.mockRestore();signalSpy.mockRestore();}
 });
 

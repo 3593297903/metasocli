@@ -73,7 +73,7 @@ export async function createImagePlan(root:string,input:ImageScope,persistence?:
       let action:ImagePlanItem['action']='generate',reason:string|undefined,operationId:string|undefined;
       const previous=jobs.filter(j=>j.assetId===id).at(-1);let retryOf:string|undefined;
       if(asset.media){try{if(sha256Hex(await readStable(await projectPath(root,asset.media.path),profile.maxImageBytes))!==asset.media.sha256)throw new Error();action='reuse';}catch{action='blocked';reason='Existing media changed or missing; restore its original result first.';}}
-      if(previous && (!['registered','reused','superseded'].includes(previous.status)||(action==='blocked'&&previous.result))){action='recover';operationId=previous.operationId;reason=undefined;}
+      if(previous && ((!asset.media&&!['registered','reused','superseded'].includes(previous.status))||(action==='blocked'&&previous.result))){action='recover';operationId=previous.operationId;reason=undefined;}
       if(restart&&previous&&restartAncestors.has(previous.planId)&&!asset.media&&['prepared','waiting_dependency','blocked','rejected','failed','submit_unknown','superseded'].includes(previous.status)) {
         if(['blocked','superseded'].includes(previous.status)&&(previous.input||previous.requestStartedAt||previous.result))fail('IMAGE_RESTART_RECOVERY_REQUIRED','Recover an existing submitted result before replacing its plan.');
         action='generate';operationId=undefined;reason=undefined;retryOf=previous.operationId;

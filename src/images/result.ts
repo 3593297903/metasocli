@@ -23,7 +23,7 @@ export async function saveImageResponse(root:string,job:ImageJobRecord,response:
   const path=receiptFile(job.operationId,'response.bin');
   let body:Awaited<ReturnType<typeof streamResponse>>;
   try {body=await streamResponse(response,await projectPath(root,path),profile.maxResponseBytes,ctx.budget,n=>ctx.onResponseChunk?.(job.operationId,n));}
-  catch(error){if(error instanceof MetasoError||!imageTransportReason(error))throw error;return imageTransportFailure(error,effectiveImageTimeout(profile.generationTimeoutMs));}
+  catch(error){if(error instanceof MetasoError||!imageTransportReason(error))throw error;return imageTransportFailure(error,effectiveImageTimeout(profile.generationTimeoutMs,profile.generationTimeoutMode));}
   const base={schemaVersion:1 as const,operationId:job.operationId,requestHash:job.requestHash!,path,...body,httpStatus:response.status,headers,responseHeadersAt,responseSavedAt:new Date().toISOString()};
   await writeJson(await projectPath(root,receiptFile(job.operationId,'complete.json')),parse(BodyReceipt,{...base,hash:canonicalSha256(base)}));
   await ctx.checkpoint?.('response-saved',job);
@@ -105,7 +105,10 @@ export async function registerImageResult(root:string,job:ImageJobRecord,plan:Im
   const item=plan.items.find(i=>i.assetId===job.assetId)!;
   await ctx.checkpoint?.('register-before',job);
   await registerAsset(root,job.assetId,{file:await projectPath(root,job.result.path),provenance:'imagegen',expectedSha256:job.result.sha256},undefined,async(story,asset)=>{
-    await validateImagePlan(root,plan,story,item);
+    // A user may have explicitly selected this exact recovered file after unrelated segment bindings changed.
+    // Preserve that existing selection; project, recipe, prompt, job and actual dependency checks still apply.
+    const selectedExactFile=job.recoveredManually===true&&asset.media?.provenance==='user'&&asset.media.sha256===job.result!.sha256;
+    await validateImagePlan(root,plan,story,selectedExactFile?{...item,requiredBy:[]}:item);
     const current=await readImageJob(root,job.operationId);if(current.inputHash!==job.inputHash||current.fingerprint!==job.fingerprint)fail('IMAGE_JOB_CONFLICT','Image registration owner changed.');
     for(const dep of job.input?.references??[]){const media=story.assets.find(a=>a.recipe.assetId===dep.assetId)?.media;
       if(!media||media.sha256!==dep.sha256||(await streamHash(await projectPath(root,media.path),plan.profile.maxImageBytes)).sha256!==dep.sha256)fail('IMAGE_DEPENDENCY_CHANGED',`Returned image has obsolete dependency ${dep.assetId}.`);}

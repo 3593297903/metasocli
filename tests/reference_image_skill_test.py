@@ -335,5 +335,177 @@ class ImageHandoffTests(unittest.TestCase):
             self.assertEqual(list((root / ".metasocli/jobs").iterdir()), [])
 
 
+class AssetDenoiseTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.script = SCRIPT.with_name("append_asset_denoise.py")
+        spec = importlib.util.spec_from_file_location("asset_denoise", cls.script)
+        assert spec and spec.loader
+        cls.tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.tool)
+        cls.manifest, cls.texts = cls.tool.load_policy()
+
+    def batch(self, kind="character", prompt="完整基础配方。", entry="metasoclitk"):
+        return {"schemaVersion": 1, "entrySkill": entry, "items": [{"assetId": "new-asset", "kind": kind, "prompt": prompt}]}
+
+    def test_verbatim_text_hashes_and_nine_entry_kind_mappings(self):
+        expected = {"character": "fa0c6628aca1e371ffa5bf80657c3b46f14c065f4ba2683e68227d50b4145b71",
+                    "scene": "455836fe6522f6663028fbac36009d4d360dae04492a52a4ab1dad0a625199c2",
+                    "prop": "b334ee91c91ba678fde1a06c5520ac725e845964039e2093ec2568684ca505ac"}
+        evidence = []
+        for entry in sorted(self.tool.ENTRIES):
+            for kind in self.tool.KINDS:
+                with self.subTest(entry=entry, kind=kind):
+                    template_entry = "metasoclitk" if entry == "metasoclitk" else "metasocli-reference-images"
+                    base = "本故事事实与尺寸、参考角色保持。\n" + (ROOT / f"skills/{template_entry}/references/{kind}-board.md").read_text(encoding="utf-8")
+                    original = self.batch(kind, base, entry)
+                    saved = copy.deepcopy(original)
+                    result = self.tool.compose_batch(original)
+                    item = result["items"][0]
+                    self.assertEqual(original, saved)
+                    self.assertEqual(item["basePrompt"], base)
+                    self.assertEqual(item["prompt"], base + "\n\n" + self.texts[kind])
+                    self.assertEqual(hashlib.sha256(self.texts[kind].encode()).hexdigest(), expected[kind])
+                    self.assertEqual(item["denoise"]["textSha256"], expected[kind])
+                    self.assertEqual(item["recipeSha256"], hashlib.sha256(handoff.normalize_prompt(item["prompt"])).hexdigest())
+                    self.assertEqual(self.tool.compose_batch(result), result)
+                    self.tool.check_batch(result)
+                    for other in self.tool.KINDS:
+                        self.assertEqual(item["prompt"].count(self.texts[other]), int(other == kind))
+                    evidence.append({"entry": entry, "kind": kind, "promptSha256": item["recipeSha256"], "textSha256": expected[kind], "count": 1, "atEnd": True})
+        if os.environ.get("METASO_TEST_EVIDENCE_DIR"):
+            (Path(os.environ["METASO_TEST_EVIDENCE_DIR"]) / "denoise-nine-mappings.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def test_idempotence_normalization_and_eof_without_trimming_base(self):
+        for kind in self.tool.KINDS:
+            base = "  全部事实🙂\r\n视图\r尺寸\n\n"
+            final = self.tool.compose_prompt("\ufeff" + base, kind)
+            self.assertEqual(final, handoff.normalize_prompt(base).decode() + "\n\n" + self.texts[kind])
+            for variant in (final, final.rstrip("\n"), final + "\n\n", "\ufeff" + final.replace("\n", "\r\n")):
+                self.assertEqual(self.tool.compose_prompt(variant, kind), final)
+                self.tool.assert_final_prompt(variant, kind)
+
+    def test_wrong_kind_duplicate_and_position_errors_report_asset(self):
+        for kind in self.tool.KINDS:
+            for other in self.tool.KINDS:
+                if other != kind:
+                    with self.assertRaisesRegex(self.tool.ValidationError, "new-asset.*different kind"):
+                        self.tool.compose_batch(self.batch(kind, "基础\n\n" + self.texts[other]))
+            for value, error in [("基础\n\n" + self.texts[kind] * 2, "duplicate"),
+                                 ("基础\n\n" + self.texts[kind] + "尺寸说明", "at the end"),
+                                 ("基础" + self.texts[kind], "two newlines")]:
+                with self.assertRaisesRegex(self.tool.ValidationError, "new-asset.*" + error):
+                    self.tool.compose_batch(self.batch(kind, value))
+            with self.assertRaisesRegex(self.tool.ValidationError, "missing"):
+                self.tool.assert_final_prompt("只有基础", kind)
+
+    def test_utf16_boundary_includes_full_tail_and_non_bmp(self):
+        for kind in self.tool.KINDS:
+            budget = 32000 - self.tool.utf16_units(self.texts[kind]) - 2
+            base = "🙂" * (budget // 2) + "字" * (budget % 2)
+            final = self.tool.compose_prompt(base, kind)
+            self.assertEqual(self.tool.utf16_units(final), 32000)
+            self.assertTrue(final.endswith(self.texts[kind]))
+            with self.assertRaisesRegex(self.tool.ValidationError, "32000"):
+                self.tool.compose_prompt(base + "字", kind)
+
+    def test_nonapplicable_kinds_unchanged_and_scope_is_strict(self):
+        for kind in ("first_frame", "narration"):
+            text = "\ufeff原始完整文字🙂\r\n"
+            result = self.tool.compose_batch(self.batch(kind, text))
+            item = result["items"][0]
+            self.assertEqual(item["prompt"], text)
+            self.assertEqual(item["basePrompt"], text)
+            self.assertEqual(item["denoise"], {"applied": False, "textSha256": None})
+            self.tool.check_batch(result)
+        for kind in ("Character", "人物", "unknown"):
+            with self.assertRaisesRegex(self.tool.ValidationError, "new-asset.*unsupported kind"):
+                self.tool.compose_batch(self.batch(kind))
+        for entry in ("metasocli", "metasocli-reference-images", "metasocli-prompt-engine"):
+            with self.assertRaises(self.tool.ValidationError):
+                self.tool.compose_batch(self.batch(entry=entry))
+        old = self.batch()
+        old["items"][0]["status"] = "reused"
+        with self.assertRaises(self.tool.ValidationError):
+            self.tool.compose_batch(old)
+
+    def test_final_evidence_and_base_mismatch_rejected(self):
+        original = self.tool.compose_batch(self.batch())
+        for field, value in (("recipeSha256", "0" * 64), ("prompt", "缩写"), ("basePrompt", "别的基础"),
+                             ("denoise", {"applied": True, "textSha256": "0" * 64}), ("kind", "scene")):
+            broken = copy.deepcopy(original)
+            broken["items"][0][field] = value
+            with self.assertRaisesRegex(self.tool.ValidationError, "new-asset"):
+                self.tool.check_batch(broken)
+
+    def test_batch_cli_readonly_collision_and_relocation(self):
+        with test_directory() as temp:
+            source, output = temp / "new.json", temp / "final.json"
+            source.write_text(json.dumps(self.batch(), ensure_ascii=False), encoding="utf-8")
+            before = source.read_bytes()
+            def run(script, *args):
+                return subprocess.run([sys.executable, "-X", "utf8", "-B", str(script), *map(str, args)], cwd=temp,
+                                      capture_output=True, text=True, encoding="utf-8", timeout=20)
+            for _ in range(2):
+                proc = run(self.script, "compose", "--input", source, "--output", output)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(source.read_bytes(), before)
+            self.assertEqual(run(self.script, "check", "--input", output).returncode, 0)
+            frozen = output.read_bytes()
+            self.assertNotEqual(run(self.script, "compose", "--input", source, "--output", source).returncode, 0)
+            source.write_text(json.dumps(self.batch(prompt="新内容")), encoding="utf-8")
+            self.assertNotEqual(run(self.script, "compose", "--input", source, "--output", output).returncode, 0)
+            self.assertEqual(output.read_bytes(), frozen)
+            # Actual independent package copies, no symlinks and no E: literals in the helper.
+            for name in ("安装 C 布局", "安装 D 布局"):
+                installed = temp / name / "skills/metasocli-reference-images"
+                shutil.copytree(SCRIPT.parent.parent, installed)
+                proc = run(installed / "scripts/append_asset_denoise.py", "check", "--input", output)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                (installed / "references/denoise/character.txt").write_bytes(b"changed\n")
+                self.assertNotEqual(run(installed / "scripts/append_asset_denoise.py", "check", "--input", output).returncode, 0)
+
+    def test_builtin_local_handoff_stub_carries_full_tail_and_preserves_narration(self):
+        request, recipe, draft = fixture()
+        prop = copy.deepcopy(request["assets"][0])
+        prop.update(assetId="key", kind="prop", order=3, name="钥匙", requiredBySegments=["s1"], visualDescription="黄铜钥匙，完整未弯折。")
+        request["assets"].append(prop)
+        base = (SCRIPT.parent.parent / "references/prop-board.md").read_text(encoding="utf-8")
+        recipe["assets"].append({"assetId":"key", "kind":"prop", "status":"planned", "generationPrompt":base,
+            "recipeSha256":hashlib.sha256(handoff.normalize_prompt(base)).hexdigest(), "existingRelativePath":None, "contentSha256":None, "reason":None})
+        draft["recipes"].append({"assetId":"key", "kind":"prop", "prompt":base, "exactText":[], "dependencies":[]})
+        draft["segments"][0]["references"].append({"assetId":"key", "role":"reference_image"})
+        draft["recipes"].append({"assetId": "voice", "kind": "narration", "prompt": "原旁白", "dependencies": [], "exactText": []})
+        draft["segments"][0]["narration"] = {"assetId": "voice", "cues": [{"start": 0, "end": 2}]}
+        original_segments = copy.deepcopy(draft["segments"])
+        original_voice = copy.deepcopy(draft["recipes"][-1])
+        for planned, target in zip(recipe["assets"], draft["recipes"]):
+            final = self.tool.compose_prompt(planned["generationPrompt"], planned["kind"])
+            planned.update(generationPrompt=final, recipeSha256=hashlib.sha256(handoff.normalize_prompt(final)).hexdigest())
+            target["prompt"] = final
+        handoff.validate_import_draft(draft, request, recipe)
+        with test_directory() as temp:
+            result = result_fixture(recipe, temp)  # Local stub, never imagegen.
+            handoff.validate_result(result, request, recipe, temp)
+            for actual, planned in zip(result["assets"], recipe["assets"]):
+                self.assertEqual(actual["generationPrompt"], planned["generationPrompt"])
+                self.tool.assert_final_prompt(actual["generationPrompt"], actual["kind"])
+        self.assertEqual(draft["segments"], original_segments)
+        self.assertEqual(draft["recipes"][-1], original_voice)
+
+    def test_enabled_entry_docs_and_package_resource_links(self):
+        for entry in self.tool.ENTRIES:
+            body = (ROOT / "skills" / entry / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("references/denoise-policy.md", body)
+            self.assertIn("append_asset_denoise.py", body)
+            self.assertIn("entrySkill=" + entry, body)
+            shim = (ROOT / ".agents/skills" / entry / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn(f"../../../skills/{entry}/SKILL.md", shim)
+        policy = (SCRIPT.parent.parent / "references/denoise-policy.md").read_text(encoding="utf-8")
+        for resource in ("character.txt", "scene.txt", "prop.txt", "manifest.json"):
+            self.assertIn("denoise/" + resource, policy)
+            self.assertTrue((self.tool.POLICY_DIR / resource).is_file())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

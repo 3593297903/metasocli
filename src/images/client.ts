@@ -28,7 +28,7 @@ export class YicImageClient implements ImageClient {
       }
       body=form; // Native FormData supplies the boundary; file-backed Blobs avoid N large buffers.
     }
-    const timeoutMs=effectiveImageTimeout(profile.generationTimeoutMs);
+    const timeoutMs=effectiveImageTimeout(profile.generationTimeoutMs,profile.generationTimeoutMode);
     const options = {method:'POST',headers,body,redirect:'error' as const,
       signal:AbortSignal.timeout(timeoutMs),dispatcher:imageDispatcher(timeoutMs)};
     try {return await this.fetcher(IMAGE_ORIGIN+input.route,options);}
