@@ -19,6 +19,37 @@ import type { VideoWorkflowDependencies } from '../src/jobs/video-workflow.js';
 import type { H3Request } from '../src/metaso/h3.js';
 import type { VideoClient } from '../src/metaso/client.js';
 afterEach(cleanup);
+it('exposes the shared video consent guidance before the first editorial question in every video skill', async () => {
+  const link = '../../docs/VIDEO_EXECUTE.md#改稿或换参考素材时的首次确认';
+  for (const name of ['metasocli', 'metasocli-video-prompts', 'metasocli-video-prompts-旁白', 'metasoclitk']) {
+    const skill = await readFile(join('skills', name, 'SKILL.md'), 'utf8');
+    const introduction = skill.split(/^## /m)[0]!;
+    expect(introduction, name).toContain(link);
+    expect(introduction, name).toContain('../../docs/VIDEO_EXECUTE.md#本机视频授权');
+    expect(introduction, name).toContain('.local/video-execution-authorization.md');
+  }
+});
+
+it('keeps an optional install-local video grant scoped to the existing confirmed submission', async () => {
+  const guide = await readFile('docs/VIDEO_EXECUTE.md', 'utf8');
+  const section = guide.split(/^## /m).find(text => text.startsWith('本机视频授权'));
+  expect(section).toBeDefined();
+  for (const term of ['.local/video-execution-authorization.md', 'justification', 'batchId', 'metaso.cn', '完整提示词', '绑定素材', '内联 Context IR', 'VIDEO_UNKNOWN_RETRY.md']) {
+    expect(section, term).toContain(term);
+  }
+});
+
+it('puts the selected draft, bound media, destination and paid scope in the same user-facing video question', async () => {
+  const guide = await readFile('docs/VIDEO_EXECUTE.md', 'utf8');
+  const section = guide.split(/^## /m).find(text => text.startsWith('改稿或换参考素材时的首次确认'));
+  expect(section).toContain('仅保存候选稿');
+  const question = section?.split(/\r?\n/).find(line => line.startsWith('> ') && line.includes('？'));
+  expect(question).toBeDefined();
+  for (const term of ['保留原稿', '完整提示词', '参考', '旁白', 'Metaso', 'metaso.cn', '集段', '次数', 'Context IR', '费用']) {
+    expect(question, term).toContain(term);
+  }
+});
+
 it('installed CLI preparation never accesses either credential environment variable or fetch',async()=>{
   const f=await batchFixture([1]),guard=join(f.root,'guard.mjs');
   await writeFile(guard,"process.env=new Proxy(process.env,{get(target,key){if(['METASO_API_KEY','METASOCLI_IMAGE_API_KEY'].includes(key))throw Error('unexpected secret read');return Reflect.get(target,key);}});globalThis.fetch=()=>{throw Error('unexpected network');};");

@@ -1,6 +1,6 @@
 # metasocli
 
-最近一次通过离线验收的源码快照为 `metasocli-0.1.0-snapshot-20261106-123755`。恢复时使用该标签或其完整 Git 提交号。[2026-11-06 版本记录](docs/VERSION_SNAPSHOT_20261106.md)
+当前源码快照为 `metasocli-0.1.0-snapshot-20261106-173831`。恢复时使用该标签或其完整 Git 提交号。[本机视频授权版本记录](docs/VERSION_SNAPSHOT_20261106_VIDEO_AUTH.md)
 
 独立的 Node.js / TypeScript CLI，将完整剧本或成品视频提示词整理为 Metaso `MiniMax-H3` 请求计划，并管理提交、查询、恢复及视频下载。当前版本 **0.1.0**。2026-09-21 起默认视频请求明确启用 `context_ir_enabled:true`；本次切换只做离线验证，没有发起付费生成。
 

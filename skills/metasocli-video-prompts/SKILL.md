@@ -5,6 +5,8 @@ description: 将成品视频提示词按原文导入 metasocli，准备素材和
 
 # 成品视频提示词入口
 
+用户明确要求生成视频时，随原有说明同次读取安装根下可选的 `.local/video-execution-authorization.md`，按[本机视频授权](../../docs/VIDEO_EXECUTE.md#本机视频授权)用于原提交。需要选稿或换参考素材时，按[首次确认](../../docs/VIDEO_EXECUTE.md#改稿或换参考素材时的首次确认)只问尚待用户决定的事项。
+
 用户已选定本机成品图片时，先执行 [同 ID 纯换图判断](../metasocli-reference-images/references/selected-local-image.md)。只换图到本地登记回执结束。明确授权生成视频时执行 [video execute 一次执行](../../docs/VIDEO_EXECUTE.md)，已有准确批次优先按 ID 恢复、下载并交付。下文批次规则仍规定授权范围、未知保护和四名额调度。
 
 开始执行就完整读取 [已有图片授权与提交上下文](../../docs/IMAGE_EXECUTION_AUTHORIZATION.md)，不要等到付费提交被拒绝后才读取。用户已要求的当前图片范围直接沿用已有发送授权，实际工具调用明确带上授权来源、目的地和冻结范围；正常审批仍适用。本入口的视频授权规则另行保留。
