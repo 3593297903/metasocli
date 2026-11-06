@@ -1,13 +1,14 @@
-import { open, mkdir, rename, unlink } from 'node:fs/promises';
+import { open, mkdir, rename, unlink, lstat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { Output, type Job, type SavedOutput } from '../contracts/job.js';
 import { parse } from '../contracts/story.js';
-import { fail } from '../core/errors.js';
+import { fail, isCode } from '../core/errors.js';
 import { exists, projectPath } from '../storage/paths.js';
 import { readJson, writeJson, syncDirectory } from '../storage/io.js';
 import { sameFileIdentity } from '../storage/file-identity.js';
+import { canonicalSha256 } from '../storage/canonical.js';
 import { publicHttps, type Fetch } from '../metaso/transport.js';
 
 export const MAX_VIDEO_BYTES = 512 * 1024 * 1024;
@@ -84,19 +85,48 @@ export async function inspectVideo(file: string): Promise<Omit<SavedOutput, 'pat
 const DownloadReceipt = z.object({ operationId: z.uuid(), taskId: z.string(), requestHash: z.string(), output: Output }).strict();
 const outputPath = (job: Job) => `outputs/${job.episodeId}/${job.segmentId}-${job.operationId}.mp4`;
 const downloadReceipt = (job: Job) => `.metasocli/receipts/${job.operationId}-download.json`;
-export async function reconcileOutput(root: string, job: Job): Promise<SavedOutput | undefined> {
+/** Cheap publication guard around the expensive MP4/receipt verification. */
+export async function outputVersion(root:string, job:Job) {
+  const versions = await Promise.all([outputPath(job),downloadReceipt(job)].map(async path => {
+    try {
+      const s = await lstat(await projectPath(root,path),{bigint:true});
+      return [s.dev,s.ino,s.size,s.ctimeNs,s.mtimeNs,s.nlink].join('/');
+    } catch (error) {
+      if(isCode(error,'ENOENT'))return 'missing';
+      throw error;
+    }
+  }));
+  return versions.join('|');
+}
+export function localVideoIssue(code:string) {
+  return ['OUTPUT_MISSING','OUTPUT_CHANGED','OUTPUT_RECEIPT_INVALID','OUTPUT_RECEIPT_MISSING','OUTPUT_METADATA','VIDEO_INVALID','VIDEO_CHANGED',
+    'VIDEO_DURATION','VIDEO_RATIO','DOWNLOAD_FAILED','DOWNLOAD_REDIRECT','DOWNLOAD_TRUNCATED'].includes(code);
+}
+export async function reconcileOutput(root: string, job: Job, verifyRecorded = false): Promise<SavedOutput | undefined> {
   const target = await projectPath(root, outputPath(job));
-  if (!await exists(target)) {
-    if (job.status === 'downloaded') fail('OUTPUT_MISSING', 'Recorded video is missing. Restore the file or explicitly download the same task again.');
-    return undefined;
-  }
-  const receiptFile = await projectPath(root, downloadReceipt(job));
-  if (!await exists(receiptFile)) fail('OUTPUT_CONFLICT', 'Output exists without its own verification receipt.');
-  const receipt = parse(DownloadReceipt, await readJson(receiptFile));
-  if (receipt.operationId !== job.operationId || receipt.taskId !== job.taskId || receipt.requestHash !== job.requestHash || receipt.output.path !== outputPath(job)) fail('OUTPUT_CONFLICT', 'Output receipt belongs to another operation.');
-  const actual = await inspectVideo(target);
-  if (actual.sha256 !== receipt.output.sha256 || actual.bytes !== receipt.output.bytes) fail('OUTPUT_CHANGED', 'Saved video differs from its download receipt.');
-  return { path: outputPath(job), ...actual };
+  const present=await exists(target), receiptFile=await projectPath(root,downloadReceipt(job));
+  if (job.output && job.output.path!==outputPath(job)) fail('OUTPUT_CONFLICT','Recorded output points outside this operation.');
+  if (await exists(receiptFile)) {
+    let receipt;
+    try { receipt=parse(DownloadReceipt,await readJson(receiptFile)); }
+    catch(error){
+      if(isCode(error,'INVALID_JSON') || isCode(error,'INVALID_INPUT'))fail('OUTPUT_RECEIPT_INVALID','Invalid local download receipt for '+job.operationId);
+      throw error;
+    }
+    if(receipt.operationId!==job.operationId || receipt.taskId!==job.taskId || receipt.requestHash!==job.requestHash || receipt.output.path!==outputPath(job))
+      fail('OUTPUT_CONFLICT','Output receipt belongs to another operation: '+job.operationId);
+    if(present) {
+      const actual = await inspectVideo(target);
+      if (actual.sha256 !== receipt.output.sha256 || actual.bytes !== receipt.output.bytes) fail('OUTPUT_CHANGED', 'Saved video differs from its download receipt.');
+      const output = { path: outputPath(job), ...actual };
+      if (verifyRecorded && (!job.output || canonicalSha256(job.output) !== canonicalSha256(output) || canonicalSha256(receipt.output) !== canonicalSha256(output))) {
+        fail('OUTPUT_METADATA', 'Downloaded file, job and receipt must agree for delivery.');
+      }
+      return output;
+    }
+  } else if(present)fail('OUTPUT_RECEIPT_MISSING','Output lacks its download receipt: '+job.operationId);
+  if(job.status==='downloaded')fail('OUTPUT_MISSING','Recorded video is missing. Recover this original task.');
+  return undefined;
 }
 export async function downloadVideo(root: string, job: Job, url: string, duration: number, fetcher: Fetch = fetch, ratio = 'adaptive',
   commit: (work: () => Promise<void>) => Promise<void> = work => work(), checkpoint?: (point: string) => Promise<void>): Promise<SavedOutput> {
@@ -119,7 +149,14 @@ export async function downloadVideo(root: string, job: Job, url: string, duratio
   const temp = await projectPath(root, `${outputPath(job)}.part-${randomUUID()}`);
   const handle = await open(temp, 'wx', 0o600), reader = response.body.getReader(); let size = 0, moved = false;
   try {
-    for (;;) { const chunk = await reader.read(); if (chunk.done) break; size += chunk.value.length; if (size > MAX_VIDEO_BYTES) fail('VIDEO_INVALID', 'Video exceeds its size limit.'); await handle.writeFile(chunk.value); }
+    for (;;) {
+      const chunk = await reader.read().catch(() =>
+        fail('DOWNLOAD_FAILED', 'Video response body was interrupted; resume the same task.'));
+      if (chunk.done) break;
+      size += chunk.value.length;
+      if (size > MAX_VIDEO_BYTES) fail('VIDEO_INVALID', 'Video exceeds its size limit.');
+      await handle.writeFile(chunk.value);
+    }
     if (length && !response.headers.get('content-encoding') && Number(length) !== size) fail('DOWNLOAD_TRUNCATED', 'Video body does not match Content-Length.');
     await handle.sync(); await handle.close();
     const metadata = await inspectVideo(temp);

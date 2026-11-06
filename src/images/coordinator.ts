@@ -6,7 +6,7 @@ import { loadStory } from '../core/project.js';
 import { exists, safePath, projectPath, pathIdentity, samePath } from '../storage/paths.js';
 import { readJson, writeJson } from '../storage/io.js';
 import { canonicalSha256 } from '../storage/canonical.js';
-import { serialized, waitLease, acquireLease, liveLease, assertLegacySchedulerIdle } from '../storage/locking.js';
+import { serialized, waitLease, acquireLease, liveProjectLease, assertLegacySchedulerIdle } from '../storage/locking.js';
 import { runtimeDirectory } from '../jobs/coordinator.js';
 import { ImageProfile, ImageStatus, resolvedImage, type ImageJobRecord, type Profile } from './contracts.js';
 import { readImageJob, readBodyReceipt } from './store.js';
@@ -49,7 +49,7 @@ export async function reconcileImageLedger(root:string,profile:Profile,runtime?:
     const job=await readImageJob(root,slot.operationId);if(job.fingerprint!==slot.fingerprint||job.projectId!==slot.projectId||job.planId!==slot.planId||job.assetId!==slot.assetId||(slot.requestHash&&job.requestHash!==slot.requestHash))fail('IMAGE_LEDGER_CONFLICT','Image ledger input changed.');
     if(resolvedImage(slot.status)&&!resolvedImage(job.status))continue;
     Object.assign(slot,imageSlot(slot.root,job));
-    if(job.status==='submitting'&&!await liveLease(await projectPath(root,`.metasocli/image-receipts/${job.operationId}/receiver.lock`))){const body=await readBodyReceipt(root,job);slot.status=body?'response_saved':'submit_unknown';}
+    if(job.status==='submitting'&&!await liveProjectLease(root,`.metasocli/image-receipts/${job.operationId}/receiver.lock`)){const body=await readBodyReceipt(root,job);slot.status=body?'response_saved':'submit_unknown';}
   }await save();return ledger;
 });}
 export function assertKnownCapacity(profile:Profile,requests:number){const limits=profile.providerLimits;if(!limits)return;
@@ -64,7 +64,7 @@ export function imageCapacityWait(ledger:LedgerRecord,profile:Profile,now=Date.n
   return undefined;
 }
 export async function acquireImageScheduler(root:string,profile:Profile,runtime?:string){
-  await loadStory(root);const legacy=await safePath(join(imageRuntime(profile,runtime),'scheduler.lock'));
+  await loadStory(root);const legacy=join(imageRuntime(profile,runtime),'scheduler.lock');
   await assertLegacySchedulerIdle(legacy);
   const lease=await acquireLease(await projectPath(root,'.metasocli/image-scheduler.lock'));
   try{await assertLegacySchedulerIdle(legacy);return lease;}catch(error){await lease.release();throw error;}

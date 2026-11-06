@@ -22,6 +22,7 @@ import { parse } from '../contracts/story.js';
 import { z } from 'zod';
 import { createBatchPlan, batchStatus, loadBatch, loadBatchRun } from '../jobs/batch-store.js';
 import { runBatch, authorizeBatchRetry } from '../jobs/batch.js';
+import { executeVideo, type VideoWorkflowDependencies } from '../jobs/video-workflow.js';
 import { listVideoRetries, retryProgress } from '../jobs/video-retry.js';
 import { reconcileRuntime, occupied, inspectRuntime, capacitySnapshot } from '../jobs/coordinator.js';
 import { createImagePlan, loadImageProfile } from '../images/planning.js';
@@ -74,6 +75,10 @@ batch retry --root <path> --batch <id> --operation <local-operation-id> --confir
 batch status --root <path> --batch <id>
   batch run/resume/retry: [--capacity-wait-ms <0..300000>] [--capacity-poll-ms <10..60000>] (30000 / 250 defaults)
 batch register --root <path>  Register known existing tasks in the shared installation capacity ledger.
+video execute --root <path> (--batch <id>|--selection <json>|--episodes <ordered,ids>) [--verify-av]
+  Without --confirm: local preparation/status/delivery only. Prefer --batch <id> --confirm to execute.
+  Selector confirmation requires --expect-scope <scopeHash>. Optional selector --concurrency <1..4>.
+  Polling, capacity and scheduler wait options match batch run. --verify-av checks video and audio locally.
 status     --root <path> [--operation <id>] [--remote]
 resume     --root <path> --operation <id> [--max-polls <1..720>] [--poll-ms <0..60000>]
 download   --root <path> --operation <id> [--redownload-missing]
@@ -129,6 +134,7 @@ const flags: Record<string, { strings?: string[]; booleans?: string[] }> = {
   'batch resume': { strings: ['batch', 'max-polls', 'poll-ms', 'scheduler-wait-ms', 'accept-existing-unknown', 'capacity-wait-ms', 'capacity-poll-ms'] },
   'batch retry': { strings: ['batch', 'operation', 'max-polls', 'poll-ms', 'scheduler-wait-ms', 'capacity-wait-ms', 'capacity-poll-ms'], booleans: ['confirm', 'accept-unknown-result'] },
   'batch status': { strings: ['batch'] }, 'batch register': {},
+  'video execute': { strings:['batch','selection','episodes','concurrency','expect-scope','max-polls','poll-ms','scheduler-wait-ms','capacity-wait-ms','capacity-poll-ms'], booleans:['confirm','verify-av'] },
   'images auth-status': {},
   'images prepare': { strings:['batch','preparation','python'] },
   'images collect': { strings:['preparation','python'] },
@@ -153,17 +159,24 @@ function pollOptions(v: Record<string, Value>) {
 }
 function jobExit(job: { status: string; lastError?: unknown }) { return ['prepared', 'failed', 'cancelled', 'submit_unknown', 'query_unknown'].includes(job.status) || job.lastError ? 2 : 0; }
 export interface CliResult { exitCode: number; data: unknown }
-export async function runCli(args: string[], injected?: JobDependencies & { irClient?: ContextIrClient; irPersistence?: IrPersistence }, imageInjected?: ImageDependencies): Promise<CliResult> {
+export async function runCli(args: string[], injected?: VideoWorkflowDependencies & { irClient?: ContextIrClient; irPersistence?: IrPersistence }, imageInjected?: ImageDependencies): Promise<CliResult> {
   try {
     if (!args.length || args.includes('--help') || args[0] === 'help') return { exitCode: 0, data: HELP };
     if (args[0] === '--version') return { exitCode: 0, data: '0.1.0' };
-    const count = ['assets', 'auth', 'batch', 'images'].includes(args[0] ?? '') ? 2 : 1, command = args.slice(0, count).join(' '), spec = flags[command];
+    const count = ['assets', 'auth', 'batch', 'images', 'video'].includes(args[0] ?? '') ? 2 : 1, command = args.slice(0, count).join(' '), spec = flags[command];
     if (!spec) fail('CLI_ARGUMENT', 'Unknown command. Run --help.');
     const options: Record<string, { type: 'string' | 'boolean' }> = { root: { type: 'string' }, json: { type: 'boolean' }, 'runtime-dir': { type: 'string' } };
     for (const name of spec.strings ?? []) options[name] = { type: 'string' };
     for (const name of spec.booleans ?? []) options[name] = { type: 'boolean' };
     let v: Record<string, Value>;
-    try { v = parseArgs({ args: args.slice(count), options, strict: true, allowPositionals: false }).values as Record<string, Value>; }
+    try {
+      const parsed = parseArgs({ args: args.slice(count), options, strict: true, allowPositionals: false, tokens: true });
+      if (command === 'video execute') {
+        const names = parsed.tokens.filter(token => token.kind === 'option').map(token => token.name);
+        if (new Set(names).size !== names.length) fail('CLI_ARGUMENT', 'Specify each video option once.');
+      }
+      v = parsed.values as Record<string, Value>;
+    }
     catch { return fail('CLI_ARGUMENT', 'Invalid command options. Run --help; values and secrets are not echoed.'); }
     if (command === 'auth status') return { exitCode: 0, data: { ...(await credentialStatus()), provider: 'Metaso', model: 'MiniMax-H3', liveCheckPerformed: false } };
     if (command === 'images auth-status') return {exitCode:0,data:{...await imageCredentialStatus(),provider:'yiciyuang',requestedModel:'gpt-image-2.5',liveCheckPerformed:false}};
@@ -209,6 +222,16 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
       return { client: injected.irClient, fetcher: injected.fetcher, persistence: injected.irPersistence, sleep: injected.sleep };
     };
     if (command === 'init') return { exitCode: 0, data: await initializeStory(root, typeof v.name === 'string' ? v.name : basename(root)) };
+    if (command === 'video execute') {
+      return await executeVideo(root,{
+        ...(v.batch===undefined?{}:{batch:required(v,'batch')}),
+        ...(v.selection===undefined?{}:{selection:await readJson(resolve(required(v,'selection')))}),
+        ...(v.episodes===undefined?{}:{episodes:required(v,'episodes').split(',').map(s=>s.trim())}),
+        concurrency:number(v,'concurrency'),expectScope:v['expect-scope'] as string|undefined,
+        confirm:v.confirm===true,verifyAv:v['verify-av']===true,
+        options:{...pollOptions(v),...capacityOptions(v),schedulerWaitMs:number(v,'scheduler-wait-ms')}
+      }, await deps());
+    }
     if (command === 'batch plan') return { exitCode: 0, data: await createBatchPlan(root, {
       ...(v.episodes !== undefined ? { episodes: required(v, 'episodes').split(',').map(id => id.trim()) } : {}),
       ...(v.selection !== undefined ? { selection: await readJson(resolve(required(v, 'selection'))) } : {}),
@@ -324,8 +347,12 @@ export async function runCli(args: string[], injected?: JobDependencies & { irCl
   } catch (error) { const detail=publicError(error);return { exitCode: 1, data: { error: detail,...(args[0]==='images'&&args.includes('--summary')?{blocker:imageBlockerCategory(detail.code)}:{}),...(error instanceof Error&&'preparationProgress' in error?{preparation:error.preparationProgress}:{}) } }; }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const result = await runCli(process.argv.slice(2));
-  const data = redact(result.data, [process.env.METASO_API_KEY ?? '', process.env.METASOCLI_IMAGE_API_KEY ?? '']);
+  const args = process.argv.slice(2);
+  const result = await runCli(args);
+  // video execute emits a bounded projection of local IDs/paths/status codes.
+  // Printing it (including a purely local delivery) needs no credential access.
+  const secrets = args[0] === 'video' && args[1] === 'execute' ? [] : [process.env.METASO_API_KEY ?? '', process.env.METASOCLI_IMAGE_API_KEY ?? ''];
+  const data = redact(result.data, secrets);
   process.stdout.write(typeof data === 'string' ? `${data}\n` : `${JSON.stringify(data, null, 2)}\n`);
   process.exitCode = result.exitCode;
 }

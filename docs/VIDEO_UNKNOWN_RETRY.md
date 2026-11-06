@@ -30,6 +30,10 @@ node E:\metasocli\dist\cli\main.js resume --root <story> --operation <newOperati
 
 创建异常证据保存在原 receipts 目录，包含阶段、耗时、原错误 name/code、是否收到响应头、HTTP 状态和可用 request ID；不保存密钥、认证头、请求正文或签名链接。证据帮助定位下一次故障，不提供供应商幂等保证。
 
+## 单段重试以后明确授权整批
+
+“继续”、`batch resume`、`video execute --batch <批次ID> --confirm` 会保留原单段限制。若用户明确把授权扩大到这个准确批次的全部集段，并覆盖视频与内联 IR 费用，使用 `batch run --root <故事根> --batch <批次ID> --confirm`。该命令保留逐段任务绑定和一次性重试记录，把完整范围决定记入同一批次的 `batch-full-authorized` 轨迹。记录落盘后，普通恢复可沿用整批授权补齐剩余段；落盘前中断，普通恢复仍按旧范围执行。新增的未知结果继续适用一次性重试规则。
+
 ## 找回原任务后又确认失败
 
 原未知 A → 已授权但未发送 B → 找回 A 的 taskId 时，B 保存为 `cancelled / RETRY_SUPERSEDED`。如果随后查询 A 得到供应商明确 `failed` 或 `cancelled`，当前用户明确要求重新生成时使用普通失败重试：
@@ -42,7 +46,7 @@ node E:\metasocli\dist\cli\main.js generate --root <story> --plan <planId> --seg
 
 若原批次已保存完整范围授权，也可直接执行 `batch retry --root <story> --batch <batchId> --operation <failedOperationId> --confirm`（不带 `--accept-unknown-result`）。它先保存一个独立 prepared 尝试，再交回同项目调度器；准备后中断由原 `batch resume` 接回。同一命令重复执行始终复用该尝试，即使新尝试再次失败、未知或被 429 明确拒绝，也不会由这次授权继续 POST。没有完整批次授权、或只有 `retryOnly` 授权时不能扩大范围，使用明确范围的单段重试。
 
-原范围已授权的批次使用 `batch resume`，按最新有效尝试重建为 C 的索引，接回准备中的 C 或查询/下载已接受的 C。只有 B 的 `retryOnly` 授权的批次不能扩大为对 C 的提交授权；C 已准备但未发送时重复上述单段命令，已接受时可按 C 的 ID 恢复。C 再次明确失败，下一次授权针对 C；C 再次未知，下一次授权针对 C 并带风险确认参数。重复任何针对 A 的旧命令都不产生 D。
+单段 generate 已创建 C 时，原批次仍指向原操作。要让这个批次交付 C，使用上面的 batch retry 明确关联原操作和 C。它复用已有 C，随后 batch resume 可接回准备中的 C 或查询、下载已接受的 C。只有 B 的 `retryOnly` 授权的批次不能扩大为对 C 的提交授权；C 已准备但未发送时重复上述单段命令，已接受时可按 C 的 ID 恢复。C 再次明确失败，下一次授权针对 C；C 再次未知，下一次授权针对 C 并带风险确认参数。重复任何针对 A 的旧命令都不产生 D。
 
 仅查询失败、超时、queued/running 或未知状态不属于供应商明确失败，继续用原 ID 恢复。批次查询和创建并行，回执/批次索引检查点的合法状态可能已是 running；不会为了恢复而降级为 queued。
 

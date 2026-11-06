@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { cleanup } from './helpers.js';
 import { batchFixture, evidence } from './batch-helpers.js';
 import { runCli } from '../src/cli/main.js';
-import { runBatch } from '../src/jobs/batch.js';
+import { authorizeBatchRetry, runBatch } from '../src/jobs/batch.js';
 import { batchStatus } from '../src/jobs/batch-store.js';
 import { attachTask, resume } from '../src/jobs/resume.js';
 import { listJobs, persistence, readJob } from '../src/jobs/store.js';
@@ -96,6 +96,8 @@ it.each(['prepared', 'receipt'] as const)('existing authorized batch indexes C a
   });
   const c = (await listJobs(f.root)).at(-1)!;
   expect(c.attempt).toBe(3);
+  expect((await batchStatus(f.root,f.batch.plan.batchId)).items[0]!.job!.operationId).toBe(f.a.operationId);
+  await authorizeBatchRetry(f.root,f.batch.plan.batchId,f.a.operationId,true,false);
   await runBatch(f.root, f.batch.plan.batchId, false, { client: f.client }, { maxPolls: 1, pollIntervalMs: 0 });
   const status = await batchStatus(f.root, f.batch.plan.batchId);
   expect(status.run!.items[0]!.operationId).toBe(c.operationId);

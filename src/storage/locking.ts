@@ -4,7 +4,7 @@ import { hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { fail, isCode } from '../core/errors.js';
-import { exists, pathIdentity, projectPath, safePath } from './paths.js';
+import { exists, pathIdentity, projectPath, resolveProjectPath, safeLockObservationPath, safePath } from './paths.js';
 import { readStable } from './io.js';
 import { sameFileIdentity } from './file-identity.js';
 import type { FileHandle } from 'node:fs/promises';
@@ -25,10 +25,15 @@ async function owner(file: string) {
 function dead(pid: number): boolean {
   try { process.kill(pid, 0); return false; } catch (e) { return isCode(e, 'ESRCH'); }
 }
-export async function liveLease(file: string): Promise<z.infer<typeof Owner> | undefined> {
+export function liveProjectLease(root:string,relative:string) {
+  return liveLease(resolveProjectPath(root,relative));
+}
+export function liveLease(file:string) { return observeLease(file,false); }
+async function observeLease(file: string, legacy:boolean): Promise<z.infer<typeof Owner> | undefined> {
   for (let observation = 0; ; observation++) {
-    try { await safePath(file); }
+    try { await safeLockObservationPath(file); }
     catch (error) { if (isCode(error, 'ENOENT') && !await exists(file)) return undefined; throw error; }
+    if(legacy && await exists(file+'.recovery'))fail('LOCK_UNKNOWN','Legacy scheduler recovery is unresolved; preserve it before switching versions.');
     if (!await exists(file)) return undefined;
     let record;
     try { record = await owner(file); }
@@ -114,9 +119,8 @@ export async function waitLease(file: string, waitMs = 10000): Promise<Lease> {
 }
 /** Cold upgrade gate only. New schedulers never hold an installation-wide run lock. */
 export async function assertLegacySchedulerIdle(file: string) {
-  if (await exists(`${file}.recovery`)) fail('LOCK_UNKNOWN', 'Legacy scheduler recovery is unresolved; preserve it before switching versions.');
+  if (await observeLease(file,true)) fail('LEGACY_SCHEDULER_BUSY', 'An older scheduler is active or its owner cannot be disproved. Finish it before a cold version switch.');
   if (!await exists(file)) return;
-  if (await liveLease(file)) fail('LEGACY_SCHEDULER_BUSY', 'An older scheduler is active or its owner cannot be disproved. Finish it before a cold version switch.');
   const stale = await acquireLease(file); // Existing dead-PID, same-host recovery protocol.
   await stale.release();
 }
@@ -127,7 +131,7 @@ export function withProjectWrite<T>(root: string, work: (assertOwned: () => Prom
     for (;;) {
       try { lease = await acquireLease(await projectPath(root, '.metasocli/project.lock'), await projectPath(root, '.metasocli/recovery.lock')); break; }
       catch (error) {
-        if (!isCode(error, 'LOCK_BUSY') || Date.now() >= until || (await liveLease(await projectPath(root, '.metasocli/project.lock')))?.pid === process.pid) throw error;
+        if (!isCode(error, 'LOCK_BUSY') || Date.now() >= until || (await liveProjectLease(root, '.metasocli/project.lock'))?.pid === process.pid) throw error;
       }
       await new Promise(resolve => setTimeout(resolve, 25));
     }

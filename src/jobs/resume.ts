@@ -9,14 +9,14 @@ import { projectPath } from '../storage/paths.js';
 import { ProviderError, TaskId, type Observation, type VideoClient } from '../metaso/client.js';
 import { persistence, readJob, saveEvidence } from './store.js';
 import type { JobDependencies } from './submit.js';
-import { downloadVideo, reconcileOutput } from './video.js';
+import { downloadVideo, localVideoIssue, reconcileOutput } from './video.js';
 import { operationKind, assertTaskIdAvailable } from './submission-guard.js';
 import { terminal, reconcileRuntime, runtimeDirectory, withCoordinator } from './coordinator.js';
 
 const Options = z.object({
   maxPolls: z.number().int().min(1).max(720).default(60), pollIntervalMs: z.number().int().min(0).max(60000).default(5000),
   queryAttempts: z.number().int().min(1).max(5).default(3), retryBudgetMs: z.number().int().min(0).max(60000).default(30000),
-  download: z.boolean().default(true), redownloadMissing: z.boolean().default(false), observeOnly: z.boolean().default(false),
+  download: z.boolean().default(true), redownloadMissing: z.boolean().default(false), observeOnly: z.boolean().default(false), strictDelivery:z.boolean().default(false),
 }).strict();
 type Options = z.infer<typeof Options>;
 const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -106,6 +106,7 @@ export async function resume(root: string, operationId: string, deps: JobDepende
               return work();
             }), async point => deps.checkpoint?.(point, job));
         } catch (error) {
+          if(options.strictDelivery && (!(error instanceof MetasoError) || !localVideoIssue(error.code)))throw error;
           return await withProjectWrite(root, async () => {
             const current = await readJob(root, operationId);
             if (current.status === 'downloaded') return current;

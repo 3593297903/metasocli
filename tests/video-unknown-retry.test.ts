@@ -12,7 +12,7 @@ import { resume, attachTask } from '../src/jobs/resume.js';
 import { listJobs, persistence, readJob } from '../src/jobs/store.js';
 import { authorizeVideoRetry, listVideoRetries, retryPath } from '../src/jobs/video-retry.js';
 import { occupied, reconcileRuntime, blockingSlots } from '../src/jobs/coordinator.js';
-import { runBatch } from '../src/jobs/batch.js';
+import { authorizeBatchRetry, runBatch } from '../src/jobs/batch.js';
 import { batchStatus } from '../src/jobs/batch-store.js';
 import { runCli } from '../src/cli/main.js';
 import { MetasoClient, ProviderError, type VideoClient } from '../src/metaso/client.js';
@@ -167,7 +167,7 @@ it('rechecks original receipt after preflight and before reservation, and rebuil
   const client:VideoClient={async create(){posts++;throw new Error('lost');},async query(taskId){return {taskId,status:'running',rawStatus:'running',evidence};}};
   await runBatch(f.root,f.batch.plan.batchId,true,{client},{maxPolls:1,pollIntervalMs:0});
   const old=(await listJobs(f.root))[0]!,item=f.batch.plan.items[0]!;
-  await authorizeVideoRetry(f.root,item.planId,item.segmentId,old.operationId,true,true);
+  await authorizeBatchRetry(f.root,f.batch.plan.batchId,old.operationId,true,true);
   client.prepare=async()=>{delete client.prepare;await attachTask(f.root,old.operationId,'found-before-reservation',true,{client});};
   const result=await runBatch(f.root,f.batch.plan.batchId,false,{client},{maxPolls:1,pollIntervalMs:0});
   expect(result.items[0]!.job!.operationId).toBe(old.operationId);expect(result.run!.items[0]!.operationId).toBe(old.operationId);

@@ -24,6 +24,8 @@ node E:\metasocli\dist\cli\main.js batch run --root <story> --batch <batchId> --
 
 默认4个生成占位持续补位，收到 task_id 不释放；终态验证落盘后释放。下载独立最多2个并行。`batch status` 只读本地，`batch resume` 可接回任务并继续原授权内待提交段；旧 `resume --operation` 始终不新建。未显式确认的未知创建保留占位、停止该故事新增，下载失败仅恢复下载。所有新版 CLI 视频创建入口共用安装名额；真实账户并发与限流尚未付费验收。
 
+三个视频 Skill 当前优先用正式 `video execute` 完成上述批次步骤。现成图片同 ID 换图先执行一次本地 `assets register`；只有视频也获授权才继续冻结更新后的选段。假故事示例：`video execute --root S --episodes ep-1` 离线返回准确 batchId，再以 `video execute --root S --batch B --confirm` 执行。已有 run 在故事调度锁内恢复原授权；只持 taskId 的段继续查询下载，交付输出以实际 MP4 和回执为准。范围指纹、后台会话、部分交付和增强音轨验收见 [一次执行说明](VIDEO_EXECUTE.md)。
+
 ## 历史项目与恢复
 
 - 已有项目要进行新的生成，对原始集执行上述新 plan 命令即可；素材无需重新生成，原文和旁白绑定无需重导入。

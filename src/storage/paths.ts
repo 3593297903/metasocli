@@ -24,9 +24,12 @@ export async function exists(file: string): Promise<boolean> {
   try { await lstat(file); return true; } catch (e) { if (isCode(e, 'ENOENT')) return false; throw e; }
 }
 /** Fail closed for links, old story/source ancestors, Windows aliases and hardlinked files. */
-export async function safePath(input: string): Promise<string> {
+export function safePath(input:string):Promise<string>{return checkedPath(input,false);}
+/** Only for observing an existing lease owner. Acquisition and all ordinary files use safePath. */
+export function safeLockObservationPath(input:string):Promise<string>{return checkedPath(input,true);}
+async function checkedPath(input: string, observingLock:boolean): Promise<string> {
   for (let attempt = 0; ; attempt++) {
-    try { return await inspectPath(input); }
+    try { return await inspectPath(input,observingLock); }
     catch (error) {
       const leafError = error instanceof RecheckLeafRealpath;
       if (attempt >= 4 || (!leafError && !isCode(error, 'PATH_CHANGED'))) throw leafError ? error.original : error;
@@ -34,7 +37,7 @@ export async function safePath(input: string): Promise<string> {
     }
   }
 }
-async function inspectPath(input: string): Promise<string> {
+async function inspectPath(input: string, observingLock:boolean): Promise<string> {
   const full = path.resolve(input);
   if (process.platform === 'win32' && (full.startsWith('\\\\') || full.slice(3).includes(':') || /[. ](?:\\|$)/u.test(full))) {
     fail('UNSAFE_PATH', 'UNC paths, alternate streams and ambiguous Windows paths are not supported.');
@@ -51,7 +54,8 @@ async function inspectPath(input: string): Promise<string> {
     try { real = await realpath(current); }
     catch (error) {
       if (isCode(error, 'ENOENT')) fail('PATH_CHANGED', 'Path disappeared during validation; revalidate its current identity.');
-      if (process.platform === 'win32' && isCode(error, 'EPERM') && current === full
+      const recheck = isCode(error,'EPERM') || (observingLock && isCode(error,'EBADF'));
+      if (process.platform === 'win32' && recheck && current === full
         && info.isFile() && info.nlink === 1n && hasUsableFileIdentity(info)) throw new RecheckLeafRealpath(error);
       throw error;
     }
@@ -82,13 +86,17 @@ async function inspectPath(input: string): Promise<string> {
   }
   return full;
 }
-export async function projectPath(root: string, relative: string): Promise<string> {
+/** Resolve the portable name and story boundary before choosing the filesystem check. */
+export function resolveProjectPath(root: string, relative: string): string {
   if (!relative || path.isAbsolute(relative) || relative.includes('\\') || relative.split('/').some(p => p === '..' || p === '.')) {
     fail('UNSAFE_PATH', 'Expected a portable project-relative path.');
   }
   const target = path.resolve(root, relative);
   if (!contains(root, target) || key(target) === key(path.resolve(root))) fail('UNSAFE_PATH', 'Path escapes project root.');
-  return safePath(target);
+  return target;
+}
+export async function projectPath(root:string,relative:string):Promise<string>{
+  return safePath(resolveProjectPath(root,relative));
 }
 export async function initializationPath(input: string): Promise<string> {
   const root = await safePath(input);

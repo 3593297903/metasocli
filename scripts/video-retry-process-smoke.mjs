@@ -11,7 +11,7 @@ import { authorizeVideoRetry,listVideoRetries,retryPath } from '../dist/jobs/vid
 import { occupied,reconcileRuntime } from '../dist/jobs/coordinator.js';
 import { listJobs,persistence,readJob } from '../dist/jobs/store.js';
 import { attachTask,resume } from '../dist/jobs/resume.js';
-import { runBatch } from '../dist/jobs/batch.js';
+import { authorizeBatchRetry, runBatch } from '../dist/jobs/batch.js';
 import { batchStatus } from '../dist/jobs/batch-store.js';
 const packageRoot=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const base=await mkdtemp(join(tmpdir(),'metasocli-retry-process-')), previous=process.env.METASO_RUNTIME_DIR, children=new Set(),report=[];
@@ -65,6 +65,7 @@ try{
     if(stage==='retry-batch-index'){
       const prepared=await runCli(args,{client:originalClient,persistence:{...persistence,async job(root,job){await persistence.job(root,job);if(job.status==='prepared')throw new Error('stop after C prepared');}}});
       assert.equal(prepared.exitCode,1);assert.equal(originalPosts,1);
+      await authorizeBatchRetry(f.root,f.batchId,old.operationId,true,false);
     }
     const first=worker(f,old.operationId,point),workers=[first];
     if(stage==='concurrent'){workers.push(worker(f,old.operationId,point));await Promise.all(workers.map(w=>w.ended));assert.ok(workers.some(w=>w.messages.some(m=>m.result?.exitCode===0)));}
@@ -81,6 +82,7 @@ try{
     if(initialPosts.length&&stage!=='http')assert.equal(job.taskId,initialPosts[0].post);
     await runCli(args,{client});
     const repeatedGrant=await runCli(unknownArgs,{client});assert.equal(repeatedGrant.data.jobs[0].operationId,old.operationId);
+    await authorizeBatchRetry(f.root,f.batchId,old.operationId,true,false);
     const batch=await runBatch(f.root,f.batchId,false,{client},{maxPolls:1,pollIntervalMs:0});
     assert.equal(batch.run.items[0].operationId,c.operationId);
     assert.equal((await batchStatus(f.root,f.batchId)).items[0].job.operationId,c.operationId);

@@ -10,7 +10,7 @@ import { exists, projectPath, samePath } from '../storage/paths.js';
 import { readJson, writeJson } from '../storage/io.js';
 import { canonicalSha256 } from '../storage/canonical.js';
 import { withProjectWrite } from '../storage/locking.js';
-import { listJobs, readJob, persistence, jobPath, receiptPath } from './store.js';
+import { listJobs, readJob, persistence, jobPath } from './store.js';
 import { runtimeDirectory, inspectRuntime } from './coordinator.js';
 
 export const retryPath = (root: string, old: string) => projectPath(root, '.metasocli/video-retries/' + parse(z.uuid(), old) + '.json');
@@ -20,23 +20,34 @@ export function retryJob(a: VideoRetryAuthorization, revision: number): Job {
     episodeId: a.episodeId, segmentId: a.segmentId, revision, requestHash: a.requestHash, inputHash: a.inputHash,
     attempt: a.attempt, retryOf: a.oldOperationId, status: 'prepared', createdAt: a.authorizedAt, updatedAt: a.authorizedAt };
 }
+export type PlannedRequest = Pick<Job, 'projectId'|'planId'|'planHash'|'episodeId'|'segmentId'|'inputHash'|'requestHash'>;
+export function samePlannedRequest(a: PlannedRequest, b: PlannedRequest) {
+  return a.projectId === b.projectId && a.planId === b.planId && a.planHash === b.planHash
+    && a.episodeId === b.episodeId && a.segmentId === b.segmentId && a.inputHash === b.inputHash && a.requestHash === b.requestHash;
+}
+export function verifyRetryOriginal(a: VideoRetryAuthorization, original: Job) {
+  if (a.oldOperationId !== original.operationId || a.newOperationId === original.operationId || a.attempt !== original.attempt + 1
+    || a.projectId !== original.projectId || a.episodeId !== original.episodeId || a.segmentId !== original.segmentId
+    || a.inputHash !== original.inputHash || a.requestHash !== original.requestHash)
+    fail('RETRY_CONFLICT', 'Retry authorization conflicts with original operation '+original.operationId);
+}
+export function verifyRetryChild(a: VideoRetryAuthorization, child: Job) {
+  if (child.operationId !== a.newOperationId || child.retryOf !== a.oldOperationId || child.attempt !== a.attempt
+    || child.createdAt !== a.authorizedAt || !samePlannedRequest(child, a) || (child.status === 'prepared' && (child.submittedAt || child.taskId)))
+    fail('RETRY_CONFLICT', 'Retry attempt differs from its saved authorization: '+a.newOperationId);
+}
 export async function readVideoRetry(root: string, old: string, runtime?: string): Promise<VideoRetryAuthorization | undefined> {
   const file = await retryPath(root, old);
   if (!await exists(file)) return undefined;
   const a = parse(VideoRetry, await readJson(file)), { hash, ...base } = a;
   const original = await readJob(root, old), plan = await loadPlan(root, a.planId), s = plan.segments.find(s => s.segmentId === a.segmentId);
-  if (canonicalSha256(base) !== hash || a.oldOperationId !== old || a.newOperationId === old
-    || a.projectId !== original.projectId || a.projectId !== plan.projectId || a.planHash !== plan.planHash
-    || a.episodeId !== original.episodeId || a.episodeId !== plan.episodeId || a.segmentId !== original.segmentId
-    || a.inputHash !== original.inputHash || a.inputHash !== s?.inputHash || a.requestHash !== original.requestHash || a.requestHash !== s?.requestHash
-    || a.attempt !== original.attempt + 1 || s?.contextIr !== true || plan.workflow?.stage !== 'inline-video'
+  verifyRetryOriginal(a,original);
+  if (canonicalSha256(base) !== hash || a.projectId !== plan.projectId || a.planHash !== plan.planHash
+    || a.episodeId !== plan.episodeId || a.inputHash !== s?.inputHash || a.requestHash !== s?.requestHash
+    || s?.contextIr !== true || plan.workflow?.stage !== 'inline-video'
     || (runtime && !samePath(a.runtimeRoot, runtime))) fail('RETRY_CONFLICT', 'Retry authorization identity, runtime or immutable request changed.');
   if (await exists(await jobPath(root, a.newOperationId))) {
-    const child = await readJob(root, a.newOperationId);
-    if (child.retryOf !== old || child.attempt !== a.attempt || child.planId !== a.planId || child.projectId !== a.projectId
-      || child.episodeId !== a.episodeId || child.segmentId !== a.segmentId || child.inputHash !== a.inputHash || child.requestHash !== a.requestHash
-      || child.createdAt !== a.authorizedAt) fail('RETRY_CONFLICT', 'Retry attempt differs from its saved authorization.');
-    if (child.status === 'prepared' && child.submittedAt) fail('RETRY_CONFLICT', 'A prepared retry contains submission intent; preserve it for recovery, never send again.');
+    verifyRetryChild(a,await readJob(root, a.newOperationId));
   }
   return a;
 }
@@ -47,6 +58,14 @@ export async function listVideoRetries(root: string, runtime?: string) {
   for (const file of (await readdir(dir)).filter(f => f.endsWith('.json'))) result.push((await readVideoRetry(root, file.slice(0, -5), runtime))!);
   return result;
 }
+/** A missing Job is recoverable only at the authorization-only checkpoint. */
+async function hasRetrySubmissionEvidence(root:string,a:VideoRetryAuthorization) {
+  const id=a.newOperationId;
+  for(const relative of ['receipts/'+id+'.json','receipts/'+id+'-create-error.json','submissions/'+id+'.json','submissions/'+id+'.lock']){
+    if(await exists(await projectPath(root,'.metasocli/'+relative)))return true;
+  }
+  return (await inspectRuntime(a.runtimeRoot)).slots.some(s=>s.operationId===id);
+}
 /** Read-only proof that this unknown-result grant never started a new request. */
 export async function supersededRetry(root: string, a: VideoRetryAuthorization) {
   if (!(await readJob(root, a.oldOperationId)).taskId) return false;
@@ -56,15 +75,14 @@ export async function supersededRetry(root: string, a: VideoRetryAuthorization) 
   }
   // An authorization-only crash may never have written B. Missing submission evidence
   // is required as well; an absent job alone is never permission for another POST.
-  return !await exists(await receiptPath(root, a.newOperationId))
-    && !await exists(await projectPath(root, '.metasocli/submissions/' + a.newOperationId + '.json'))
-    && !(await inspectRuntime(a.runtimeRoot)).slots.some(s => s.operationId === a.newOperationId);
+  return !await hasRetrySubmissionEvidence(root,a);
 }
 /** The caller owns the project write lock. Never reset submitted/unknown attempts. */
 export async function materializeRetry(root: string, a: VideoRetryAuthorization, checkpoint?: (event: string, job: Job) => Promise<void>) {
   const plan = await loadPlan(root, a.planId);
   let child = await exists(await jobPath(root, a.newOperationId)) ? await readJob(root, a.newOperationId) : undefined;
   const old = await readJob(root, a.oldOperationId);
+  if(!child && await hasRetrySubmissionEvidence(root,a))fail('RETRY_CONFLICT','Missing retry '+a.newOperationId+' has submission evidence. Restore its record; never resend.');
   if (old.taskId && (!child || (child.status === 'prepared' && !child.submittedAt))) {
     if (child) {
       child.status = 'cancelled'; child.updatedAt = new Date().toISOString();
@@ -74,12 +92,6 @@ export async function materializeRetry(root: string, a: VideoRetryAuthorization,
     return old;
   }
   if (child) return child.lastError?.code === 'RETRY_SUPERSEDED' ? old : child;
-  if (await exists(await receiptPath(root, a.newOperationId)) || await exists(await projectPath(root, '.metasocli/submissions/' + a.newOperationId + '.json'))) {
-    fail('RETRY_CONFLICT', 'Retry job is missing but submission evidence exists. Preserve evidence; do not recreate it.');
-  }
-  if ((await inspectRuntime(a.runtimeRoot)).slots.some(s => s.operationId === a.newOperationId)) {
-    fail('RETRY_CONFLICT', 'Retry job is missing but a shared reservation exists. Preserve its capacity and recover the original record.');
-  }
   // Only the authorization checkpoint may lack a job. Any other descendant is a conflict.
   const jobs = await listJobs(root);
   if (jobs.some(j => j.retryOf === a.oldOperationId || (j.episodeId === a.episodeId && j.segmentId === a.segmentId && j.inputHash === a.inputHash && j.attempt >= a.attempt))) fail('RETRY_CONFLICT', 'Reserved retry identity is missing but another attempt exists.');
@@ -90,7 +102,8 @@ export async function materializeRetry(root: string, a: VideoRetryAuthorization,
 }
 /** No key or network access. Saving this authorization does not reserve or release capacity. */
 export async function authorizeVideoRetry(root: string, planId: string, segmentId: string, old: string, confirmed: boolean, accepted: boolean,
-  runtime?: string, checkpoint?: (event: string, job: Job) => Promise<void>) {
+  runtime?: string, checkpoint?: (event: string, job: Job) => Promise<void>,
+  linkLocked?: (authorization:VideoRetryAuthorization)=>Promise<void>) {
   if (!confirmed || !accepted) fail('GENERATION_NOT_AUTHORIZED', 'A no-ID video retry needs explicit one-attempt authorization and --accept-unknown-result.');
   parse(z.uuid(), old);
   return withProjectWrite(root, async () => {
@@ -99,6 +112,7 @@ export async function authorizeVideoRetry(root: string, planId: string, segmentI
     const saved = await readVideoRetry(root, old, runtimeDirectory(runtime));
     if (saved) {
       if (saved.planId !== planId || saved.segmentId !== segmentId) fail('RETRY_CONFLICT', 'This authorization belongs to another plan or segment.');
+      await linkLocked?.(saved);
       return { authorization: saved, job: await materializeRetry(root, saved, checkpoint) };
     }
     const jobs = await listJobs(root), original = jobs.find(j => j.operationId === old);
@@ -111,6 +125,7 @@ export async function authorizeVideoRetry(root: string, planId: string, segmentI
       authorizedAt: new Date().toISOString(), maxNewAttempts: 1 as const, acceptUnknownResult: true as const, attempt: original.attempt + 1 };
     const authorization = parse(VideoRetry, { ...base, hash: canonicalSha256(base) });
     await writeJson(await retryPath(root, old), authorization);
+    await linkLocked?.(authorization);
     await checkpoint?.('retry-authorization', retryJob(authorization, plan.revision));
     return { authorization, job: await materializeRetry(root, authorization, checkpoint) };
   });

@@ -5,7 +5,7 @@ import { parse } from '../contracts/story.js';
 import { JobSchema, Receipt, type Job } from '../contracts/job.js';
 import { loadStory } from '../core/project.js';
 import { loadPlan } from '../core/planning.js';
-import { fail } from '../core/errors.js';
+import { fail, isCode } from '../core/errors.js';
 import { exists, projectPath } from '../storage/paths.js';
 import { readJson, writeJson } from '../storage/io.js';
 import { redact, type Evidence } from '../metaso/client.js';
@@ -31,7 +31,10 @@ export const persistence: Persistence = {
 };
 export async function readJob(root: string, operationId: string): Promise<Job> {
   const job = parse(JobSchema, await readJson(await jobPath(root, operationId)));
-  const [story, plan] = await Promise.all([loadStory(root), loadPlan(root, job.planId)]);
+  const [story, plan] = await Promise.all([loadStory(root), loadPlan(root, job.planId).catch(error=>{
+    if(isCode(error,'ENOENT'))fail('JOB_PARENT_MISSING','Restore immutable parent '+job.planId+' for video operation '+operationId+' before dispatch.');
+    throw error;
+  })]);
   const segment = plan.segments.find(s => s.segmentId === job.segmentId);
   if (job.operationId !== operationId || job.projectId !== story.projectId || job.projectId !== plan.projectId || job.planHash !== plan.planHash || job.episodeId !== plan.episodeId || job.requestHash !== segment?.requestHash || job.inputHash !== segment?.inputHash) fail('JOB_CONFLICT', 'Stored job does not belong to this project and immutable plan.');
   const file = await receiptPath(root, operationId);

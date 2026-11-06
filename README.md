@@ -1,6 +1,6 @@
 # metasocli
 
-最新源码快照与恢复标签见 [2026-11-05 版本记录](docs/VERSION_SNAPSHOT_20261105.md)；请用标签或完整提交号区分同为 `0.1.0` 的不同源码版本。
+最近一次通过离线验收的源码快照为 `metasocli-0.1.0-snapshot-20261106-123755`。恢复时使用该标签或其完整 Git 提交号。[2026-11-06 版本记录](docs/VERSION_SNAPSHOT_20261106.md)
 
 独立的 Node.js / TypeScript CLI，将完整剧本或成品视频提示词整理为 Metaso `MiniMax-H3` 请求计划，并管理提交、查询、恢复及视频下载。当前版本 **0.1.0**。2026-09-21 起默认视频请求明确启用 `context_ir_enabled:true`；本次切换只做离线验证，没有发起付费生成。
 
@@ -110,6 +110,10 @@ node $cli plan --root $story --episode ep-script --workflow h3-inline-ir
 旁白扩展支持每段一份 MP3/PCM 或浮点 WAV 参考音频，2–15 秒、最多 15 MiB。与普通参考图一同提交原生 `reference_audio`，保留原图片顺序；不能与首帧混用。音频登记沿用 `assets register`，`kind: narration` 须先在草稿中声明。文件变化、缺失或不满足格式时阻止计划，不静默退回只有文字的旁白描述。请求音频传输及真实声线效果尚未进行付费验收。
 
 ## 授权后的生成与恢复
+
+三个视频 Skill（普通、旁白、metasoclitk）共用 `video execute`。例如，准备假故事第一集的有序选段可用 `node $cli video execute --root $story --selection $selectionFile`。本地 JSON 给出 batchId、scopeHash、实际集段与计数。得到覆盖这些段、素材及内联 IR 费用的视频授权后，执行 `node $cli video execute --root $story --batch $batchId --confirm`。程序持续补位、查询、下载并返回已校验的 MP4 路径。重复同一批次沿用原任务。单独重建交付用同一命令省略 `--confirm`；明确要求音视频全片解码时另加 `--verify-av`。[范围授权与一次宿主调用示例](docs/VIDEO_EXECUTE.md)
+
+已选本机图片、同一资产 ID 的所有引用都应使用新版、生成配方沿用原值时，使用一次 `assets register --root $story --id $assetId --file $selectedFile --expected-sha256 $newHash --provenance user`，来源按事实选 user/imagegen。登记返回 ID 和新文件 SHA-256，即完成纯换图。若同时授权了指定段的视频，先登记再冻结新版批次。[纯换图范围与来源](skills/metasocli-reference-images/references/selected-local-image.md)
 
 本次开发未执行下面的付费命令。只有用户明确授权当前范围及包含 IR 的视频模式后才运行；`METASO_API_KEY` 必须是 Metaso 的 Key，不与 MiniMax 官方 Key 混用。客户端只创建视频任务，其真实 POST 请求体明确包含 `context_ir_enabled:true`，不预先调用独立 IR。
 

@@ -8,7 +8,7 @@ import { fail } from '../core/errors.js';
 import { exists, pathIdentity, safePath, samePath, projectPath } from '../storage/paths.js';
 import { readJson, writeJson } from '../storage/io.js';
 import { canonicalSha256 } from '../storage/canonical.js';
-import { liveLease, serialized, waitLease, assertLegacySchedulerIdle } from '../storage/locking.js';
+import { liveProjectLease, serialized, waitLease, assertLegacySchedulerIdle } from '../storage/locking.js';
 import { listJobs } from './store.js';
 import { listVideoRetries } from './video-retry.js';
 import { BatchPlan, BatchRun } from '../contracts/batch.js';
@@ -155,15 +155,15 @@ export async function reconcileRuntime(root: string, runtime?: string) {
   return withCoordinator(root, runtimeDirectory(runtime), async ledger => ledger);
 }
 export async function requireScheduler(root: string, runtime: string, token?: string) {
-  await assertLegacySchedulerIdle(await safePath(join(runtime, 'batch.lock')));
-  const scheduler = await liveLease(await projectPath(root, '.metasocli/batch-scheduler.lock'));
+  await assertLegacySchedulerIdle(join(runtime, 'batch.lock'));
+  const scheduler = await liveProjectLease(root, '.metasocli/batch-scheduler.lock');
   if (scheduler && scheduler.token !== token) fail('SCHEDULER_BUSY', 'A batch owns this story scheduler; resume its existing tasks or wait for this story.');
   if (token && scheduler?.token !== token) fail('LOCK_LOST', 'Batch scheduler ownership was lost.');
 }
 export async function acquireScheduler(root: string, runtime: string, waitMs = 30000) {
   await loadStory(root);
-  await assertLegacySchedulerIdle(await safePath(join(runtime, 'batch.lock')));
+  await assertLegacySchedulerIdle(join(runtime, 'batch.lock'));
   const lease = await waitLease(await projectPath(root, '.metasocli/batch-scheduler.lock'), waitMs);
-  try { await assertLegacySchedulerIdle(await safePath(join(runtime, 'batch.lock'))); return lease; }
+  try { await assertLegacySchedulerIdle(join(runtime, 'batch.lock')); return lease; }
   catch (error) { await lease.release(); throw error; }
 }

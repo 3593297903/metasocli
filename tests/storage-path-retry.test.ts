@@ -11,6 +11,7 @@ vi.mock('node:fs/promises',async importOriginal=>{
   const actual=await importOriginal<typeof import('node:fs/promises')>();
   return {...actual,realpath:vi.fn(actual.realpath),lstat:vi.fn(actual.lstat),unlink:vi.fn(actual.unlink),open:vi.fn(actual.open)};
 });
+
 const actual=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
 const roots:string[]=[];
 const originalPlatform=Object.getOwnPropertyDescriptor(process,'platform')!;
@@ -171,4 +172,105 @@ test('owner-open replacement cannot bypass the next full parent boundary check',
     return actual.open(path,...args as [string]);
   }) as typeof fs.open);
   await expect(liveLease(file)).rejects.toMatchObject({code:'LEGACY_ROOT'});expect(calls).toBe(1);expect(delays).toEqual([25]);expect(fs.unlink).not.toHaveBeenCalled();expect(await actual.readFile(file)).toEqual(before);await lease.release();
+});
+
+test.each([1,4,5])('EBADF lock observation with %i faults shares the existing five-attempt budget',async failures=>{
+  const {root,file}=await fixture(),lease=await acquireLease(file),bytes=await actual.readFile(file);
+  const errors=Array.from({length:failures},()=>denied(file,'EBADF'));
+  const calls=faults(file,errors);vi.mocked(fs.realpath).mockClear();vi.mocked(fs.open).mockClear();
+  try{
+    if(failures===5){await expect(liveLease(file)).rejects.toBe(errors[4]);expect(fs.open).not.toHaveBeenCalled();}
+    else expect(await liveLease(file)).toMatchObject({token:lease.token,pid:process.pid,host:hostname()});
+    expect(calls()).toBe(Math.min(failures+1,5));expect(count(root)).toBe(calls());
+    expect(delays).toEqual(Array(Math.min(failures,4)).fill(25));
+    expect(await actual.readFile(file)).toEqual(bytes);expect(fs.unlink).not.toHaveBeenCalled();
+  }finally{vi.mocked(fs.realpath).mockImplementation(actual.realpath);await lease.release();}
+});
+test('EBADF without syscall, EPERM and PATH_CHANGED share one full path budget',async()=>{
+  const {root,file}=await fixture(),lease=await acquireLease(file),last=denied(file,'EBADF');
+  const calls=faults(file,[Object.assign(Error(),{code:'EBADF'}),denied(file,'EPERM'),denied(file,'ENOENT'),denied(file,'EBADF'),last]);
+  vi.mocked(fs.realpath).mockClear();
+  try{await expect(liveLease(file)).rejects.toBe(last);expect(calls()).toBe(5);expect(count(root)).toBe(5);expect(delays).toEqual([25,25,5,25]);}
+  finally{vi.mocked(fs.realpath).mockImplementation(actual.realpath);await lease.release();}
+});
+test.each(['ordinary .lock','acquisition','ancestor','leaf directory','non-Windows','unusable identity','multiple links','lstat','EACCES','EBUSY'])('EBADF exception does not broaden %s',async mode=>{
+  const {root,file}=await fixture();await actual.writeFile(file,'ordinary');
+  if(mode==='non-Windows')Object.defineProperty(process,'platform',{...originalPlatform,value:'linux'});
+  if(mode==='multiple links')await actual.link(file,join(root,'alias'));
+  const target=['ancestor','leaf directory'].includes(mode)?root:file;
+  const error=denied(target,['EACCES','EBUSY'].includes(mode)?mode:'EBADF');
+  const calls=faults(target,[error]);
+  if(['unusable identity','lstat'].includes(mode))vi.mocked(fs.lstat).mockImplementation((async(p,...args)=>{
+    if(mode==='lstat' && String(p)===file)throw error;
+    const info=await actual.lstat(p,...args as []);return String(p)===file?Object.assign(Object.create(info),{ino:0n}):info;
+  }) as typeof fs.lstat);
+  const result=mode==='ordinary .lock'?safePath(file):mode==='acquisition'?acquireLease(file):liveLease(mode==='leaf directory'?root:file);
+  await expect(result).rejects.toBe(error);expect(delays).toEqual([]);expect(calls()).toBe(mode==='lstat'?0:1);
+});
+test.each(['removed','new owner','symlink','junction','hardlink','protected ancestor'])('EBADF rechecks a lock replaced by %s',async kind=>{
+  const {root,file}=await fixture(),lease=await acquireLease(file),outside=await fixture();
+  const next={token:randomUUID(),pid:process.pid,host:hostname(),createdAt:new Date().toISOString()};
+  await actual.writeFile(outside.file,JSON.stringify(next));vi.mocked(fs.realpath).mockClear();
+  faults(file,[async()=>{
+    if(kind==='protected ancestor')await actual.writeFile(join(root,'story2libtv.yaml'),'protected');
+    else{
+      await actual.unlink(file);
+      if(kind==='new owner')await actual.writeFile(file,JSON.stringify(next));
+      if(kind==='symlink')await actual.symlink(outside.file,file,'file');
+      if(kind==='junction')await actual.symlink(outside.root,file,'junction');
+      if(kind==='hardlink')await actual.link(outside.file,file);
+    }
+    throw denied(file,'EBADF');
+  }]);
+  try{
+    if(kind==='removed')expect(await liveLease(file)).toBeUndefined();
+    else if(kind==='new owner')expect(await liveLease(file)).toEqual(next);
+    else await expect(liveLease(file)).rejects.toMatchObject({code:kind==='protected ancestor'?'LEGACY_ROOT':'LINK_PATH'});
+    expect(delays).toEqual([25]);expect(count(root)).toBe(2);expect(fs.unlink).not.toHaveBeenCalled();
+  }finally{vi.mocked(fs.realpath).mockImplementation(actual.realpath);await lease.release();}
+  if(kind==='new owner')expect(JSON.parse(await actual.readFile(file,'utf8'))).toEqual(next);
+});
+test.each(['story scheduler','video stage','legacy scheduler'])('EBADF live %s is still exclusive on its actual observation path',async kind=>{
+  const {root}=await fixture(),{requireScheduler}=await import('../src/jobs/coordinator.js');
+  const {startImageStage}=await import('../src/images/phase.js');
+  const file=kind==='legacy scheduler'?join(root,'batch.lock'):join(root,'.metasocli',kind==='video stage'?'video-stage.lock':'batch-scheduler.lock');
+  const lease=await acquireLease(file),calls=faults(file,[denied(file,'EBADF')]),bytes=await actual.readFile(file);
+  try{
+    const check=kind==='video stage'?startImageStage(root,{projectId:randomUUID(),planId:randomUUID(),token:randomUUID(),state:'active',runtime:root,quotaGroup:'test'}):requireScheduler(root,root);
+    await expect(check).rejects.toMatchObject({code:kind==='video stage'?'VIDEO_STAGE_ACTIVE':kind==='legacy scheduler'?'LEGACY_SCHEDULER_BUSY':'SCHEDULER_BUSY'});
+    expect(calls()).toBe(2);expect(await actual.readFile(file)).toEqual(bytes);expect(fs.unlink).not.toHaveBeenCalled();
+  }finally{vi.mocked(fs.realpath).mockImplementation(actual.realpath);await lease.release();}
+});
+test('EBADF image receiver inspection retains the live submitting slot',async()=>{
+  const {imageFixture,imageResponse,profile}=await import('./image-api-helpers.js');
+  const {cleanup}=await import('./helpers.js');
+  const {createImagePlan}=await import('../src/images/planning.js');
+  const {runImages}=await import('../src/images/run.js');
+  const {listImageJobs}=await import('../src/images/store.js');
+  const {reconcileImageLedger}=await import('../src/images/coordinator.js');
+  try{
+    const f=await imageFixture(),plan=(await createImagePlan(f.root,{episodes:['ep-1'],profile,submissionMode:'all-ready'})).plan;
+    let seen:string|undefined,observations=0;
+    const result=await runImages(f.root,plan.planId,true,{client:{async create(){
+      const j=(await listImageJobs(f.root))[0]!,file=join(f.root,'.metasocli/image-receipts',j.operationId,'receiver.lock');
+      const calls=faults(file,[denied(file,'EBADF')]);
+      try{seen=(await reconcileImageLedger(f.root,profile)).slots.find(s=>s.operationId===j.operationId)?.status;observations=calls();}
+      finally{vi.mocked(fs.realpath).mockImplementation(actual.realpath);}
+      return imageResponse();
+    }}});
+    expect(seen).toBe('submitting');expect(observations).toBe(2);expect(result.summary.registered).toBe(1);
+  }finally{await cleanup();}
+});
+test('EBADF from owner open uses the original unreadable-owner rule, with no second path inspection',async()=>{
+  const {file}=await fixture(),lease=await acquireLease(file),bytes=await actual.readFile(file);
+  vi.mocked(fs.realpath).mockClear();let opens=0;
+  vi.mocked(fs.open).mockImplementation((async(p,...args)=>{
+    if(String(p)===file){opens++;throw denied(file,'EBADF','open');}
+    return actual.open(p,...args as [string]);
+  }) as typeof fs.open);
+  try{
+    await expect(liveLease(file)).rejects.toMatchObject({code:'LOCK_UNKNOWN'});
+    expect(count(file)).toBe(1);expect(opens).toBe(5);
+    expect(await actual.readFile(file)).toEqual(bytes);expect(fs.unlink).not.toHaveBeenCalled();
+  }finally{vi.mocked(fs.open).mockImplementation(actual.open);await lease.release();}
 });

@@ -54,7 +54,8 @@ try{
   assert.equal(occupied(await reconcileRuntime(b.root)).length,4);
   report.push({scenario:'two projects, four CLI processes, project ownership and SIGKILL',posts:4,occupied:4,fifth:'CAPACITY_FULL',sameBatch:'LOCK_BUSY',sameStoryOrdinary:'SCHEDULER_BUSY',otherBatchCompletedBeforeARelease:true,recoveryPosts:0});
   console.log('PASS two projects / four CLI processes / batch ownership / process recovery: 4 POST, no duplicates or capacity bypass');
-  await mkdir(join(packageRoot,'.work'),{recursive:true});await writeFile(join(packageRoot,'.work/video-batch-process-evidence.json'),JSON.stringify({fakeClientsOnly:true,report},null,2));
+  const evidenceDir=process.env.METASO_TEST_EVIDENCE_DIR??join(packageRoot,'.work');
+  await mkdir(evidenceDir,{recursive:true});await writeFile(join(evidenceDir,'video-batch-process-evidence.json'),JSON.stringify({fakeClientsOnly:true,report},null,2));
 }finally{
   for(const child of children){child.kill('SIGKILL');await new Promise(r=>child.once('exit',r));}
   if(savedRuntime===undefined)delete process.env.METASO_RUNTIME_DIR;else process.env.METASO_RUNTIME_DIR=savedRuntime;

@@ -16,7 +16,7 @@ import { writeJson } from '../storage/io.js';
 
 export interface JobDependencies {
   client: VideoClient; fetcher?: Fetch; persistence?: Persistence; sleep?: (ms: number) => Promise<void>;
-  runtimeRoot?: string; schedulerToken?: string; capacity?: number; dispatchBatchId?: string;
+  runtimeRoot?: string; schedulerToken?: string; capacity?: number; dispatchBatchId?: string; expectedOperationId?:string;
   checkpoint?: (event: string, job: Job) => Promise<void>;
 }
 function choose(jobs: Job[], episodeId: string, segmentId: string, inputHash: string, retryOf?: string) {
@@ -72,6 +72,13 @@ export async function submit(root: string, planId: string, segmentId: string, au
     }
   }
   const initial = choose(await listJobs(root), plan.episodeId, segmentId, segment.inputHash, retryOf);
+  const assertSelection=(previous:Job|undefined)=>{
+    if(deps.dispatchBatchId && previous?.status==='prepared'
+      && (previous.planId!==planId || (!deps.expectedOperationId && previous.retryOf)))fail('BATCH_OPERATION_CONFLICT','Unbound prepared attempt requires an exact batch choice: '+previous.operationId);
+    if(deps.expectedOperationId && previous?.operationId!==deps.expectedOperationId)
+      fail('BATCH_OPERATION_CONFLICT','Batch expected '+deps.expectedOperationId+' but submit selected '+previous?.operationId);
+  };
+  assertSelection(initial.previous);
   await validatePreparedRetry(root, planId, initial.previous, runtime);
   if (initial.reuse) {
     await operationKind(root, initial.previous!.operationId);
@@ -94,6 +101,7 @@ export async function submit(root: string, planId: string, segmentId: string, au
           && (acceptUnknownResult || !['failed', 'cancelled'].includes(target.status) || !await supersededRetry(root, a))) return { job: target };
       }
       const jobs = await listJobs(root), selected = choose(jobs, plan.episodeId, segmentId, segment.inputHash, retryOf);
+      assertSelection(selected.previous);
       if (selected.reuse) {
         if (selected.previous!.status === 'submitting') fail('LOCK_BUSY', 'This request is still submitting.');
         return { job: selected.previous! };

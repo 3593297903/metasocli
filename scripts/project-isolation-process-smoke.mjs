@@ -44,7 +44,7 @@ if(process.argv[2]==='worker'){
   }catch(error){process.send({error:{code:error.code,message:error.message}});process.exitCode=1;}
   process.disconnect();
 }else{
-  const temp=join(packageRoot,'.work/project-isolation-implementation-20261102/tmp');await mkdir(temp,{recursive:true});
+  const temp=process.env.METASO_TEST_EVIDENCE_DIR ? join(process.env.METASO_TEST_EVIDENCE_DIR,'project-isolation-tmp') : join(packageRoot,'.work/project-isolation-implementation-20261102/tmp');await mkdir(temp,{recursive:true});
   const base=await mkdtemp(join(temp,'isolation-process-')),children=new Set(),report=[];const savedRuntime=process.env.METASO_RUNTIME_DIR;
   const requests=[],responses=new Map();let active=0,peak=0;
   const server=createServer(async(req,res)=>{let bytes=0;for await(const chunk of req)bytes+=chunk.length;const event={path:req.url,bytes,at:new Date().toISOString()};requests.push(event);active++;peak=Math.max(peak,active);responses.set(req.url,res);res.once('close',()=>{active--;});});server.listen(0,'127.0.0.1');await once(server,'listening');
