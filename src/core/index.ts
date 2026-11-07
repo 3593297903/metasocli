@@ -1,4 +1,5 @@
 export { initializeStory, importStory, loadStory } from './project.js';
+export { replaceSegmentPrompt } from './prompt-replacement.js';
 export { createPlan, createPlanFromContextIr, loadPlan, validatePlan } from './planning.js';
 export { registerAsset, inspectAssets } from '../assets/registry.js';
 export { MetasoClient } from '../metaso/client.js';

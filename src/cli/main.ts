@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util';
 import { basename, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { initializeStory, importStory, loadStory } from '../core/project.js';
+import { replaceSegmentPrompt } from '../core/prompt-replacement.js';
 import { createPlan, createPlanFromContextIr, loadPlan } from '../core/planning.js';
 import { inspectAssets, registerAsset } from '../assets/registry.js';
 import { fail, publicError } from '../core/errors.js';
@@ -56,6 +57,9 @@ images retry --root <path> --operation <id> --confirm
 init       --root <path> [--name <name>]
 import     --root <path> --draft <json> [--replace]
 import     --root <path> --file <utf8.txt> --kind script|video-prompts --episode <id> --duration <target-seconds: >0..15>
+prompts replace --root <path> --episode <existing-id> --segment <existing-id> --file <utf8.txt>
+                [--expected-sha256 <raw-file-hash>] [--expected-prompt-hash <old-normalized-hash>] [--narration-cues <json>]
+  One local text replacement; no generation, credential loading, media scan or shared ledger access.
 assets list     --root <path>
 assets register --root <path> --id <asset-id> (--file <image-or-narration-audio>|--url <public-https-url>) [--provenance user|imagegen]
                 [--expected-sha256 <selected-reference-hash>]
@@ -124,6 +128,7 @@ const flags: Record<string, { strings?: string[]; booleans?: string[] }> = {
   'auth status': {},
   init: { strings: ['name'] }, import: { strings: ['draft', 'file', 'kind', 'episode', 'duration'], booleans: ['replace'] },
   'assets list': {}, 'assets register': { strings: ['id', 'file', 'url', 'provenance', 'expected-sha256'] },
+  'prompts replace': { strings: ['episode', 'segment', 'file', 'expected-sha256', 'expected-prompt-hash', 'narration-cues'] },
   plan: { strings: ['episode', 'workflow', 'from-context-ir', 'review'] }, generate: { strings: ['plan', 'segment', 'retry-of', 'max-polls', 'poll-ms'], booleans: ['confirm', 'submit-only', 'accept-unknown-result'] },
   'context-ir': { strings: ['plan', 'segment', 'retry-of', 'max-polls', 'poll-ms'], booleans: ['confirm', 'submit-only'] },
   status: { strings: ['operation'], booleans: ['remote'] },
@@ -163,17 +168,18 @@ export async function runCli(args: string[], injected?: VideoWorkflowDependencie
   try {
     if (!args.length || args.includes('--help') || args[0] === 'help') return { exitCode: 0, data: HELP };
     if (args[0] === '--version') return { exitCode: 0, data: '0.1.0' };
-    const count = ['assets', 'auth', 'batch', 'images', 'video'].includes(args[0] ?? '') ? 2 : 1, command = args.slice(0, count).join(' '), spec = flags[command];
+    const count = ['assets', 'auth', 'batch', 'images', 'video', 'prompts'].includes(args[0] ?? '') ? 2 : 1, command = args.slice(0, count).join(' '), spec = flags[command];
     if (!spec) fail('CLI_ARGUMENT', 'Unknown command. Run --help.');
-    const options: Record<string, { type: 'string' | 'boolean' }> = { root: { type: 'string' }, json: { type: 'boolean' }, 'runtime-dir': { type: 'string' } };
+    const options: Record<string, { type: 'string' | 'boolean' }> = { root: { type: 'string' }, json: { type: 'boolean' } };
+    if (command !== 'prompts replace') options['runtime-dir'] = { type: 'string' };
     for (const name of spec.strings ?? []) options[name] = { type: 'string' };
     for (const name of spec.booleans ?? []) options[name] = { type: 'boolean' };
     let v: Record<string, Value>;
     try {
       const parsed = parseArgs({ args: args.slice(count), options, strict: true, allowPositionals: false, tokens: true });
-      if (command === 'video execute') {
+      if (command === 'video execute' || command === 'prompts replace') {
         const names = parsed.tokens.filter(token => token.kind === 'option').map(token => token.name);
-        if (new Set(names).size !== names.length) fail('CLI_ARGUMENT', 'Specify each video option once.');
+        if (new Set(names).size !== names.length) fail('CLI_ARGUMENT', 'Specify each option once.');
       }
       v = parsed.values as Record<string, Value>;
     }
@@ -182,6 +188,11 @@ export async function runCli(args: string[], injected?: VideoWorkflowDependencie
     if (command === 'images auth-status') return {exitCode:0,data:{...await imageCredentialStatus(),provider:'yiciyuang',requestedModel:'gpt-image-2.5',liveCheckPerformed:false}};
     const root = resolve(required(v, 'root'));
     // Local workflow branches precede even construction of the lazy network/credential adapter.
+    if (command === 'prompts replace') return { exitCode: 0, data: await replaceSegmentPrompt(root, {
+      episodeId: required(v, 'episode'), segmentId: required(v, 'segment'), file: required(v, 'file'),
+      expectedSha256: v['expected-sha256'] as string | undefined, expectedPromptHash: v['expected-prompt-hash'] as string | undefined,
+      narrationCues: v['narration-cues'] as string | undefined,
+    }) };
     if(command==='images prepare')return {exitCode:0,data:await prepareImages(root,{batch:v.batch as string|undefined,preparation:v.preparation as string|undefined,python:v.python as string|undefined})};
     if(command==='images collect'){
       const data=await collectImages(root,{preparation:required(v,'preparation'),python:v.python as string|undefined});return {exitCode:data.complete?0:2,data};
@@ -351,7 +362,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const result = await runCli(args);
   // video execute emits a bounded projection of local IDs/paths/status codes.
   // Printing it (including a purely local delivery) needs no credential access.
-  const secrets = args[0] === 'video' && args[1] === 'execute' ? [] : [process.env.METASO_API_KEY ?? '', process.env.METASOCLI_IMAGE_API_KEY ?? ''];
+  const secrets = (args[0] === 'video' && args[1] === 'execute') || (args[0] === 'prompts' && args[1] === 'replace') ? [] : [process.env.METASO_API_KEY ?? '', process.env.METASOCLI_IMAGE_API_KEY ?? ''];
   const data = redact(result.data, secrets);
   process.stdout.write(typeof data === 'string' ? `${data}\n` : `${JSON.stringify(data, null, 2)}\n`);
   process.exitCode = result.exitCode;

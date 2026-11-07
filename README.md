@@ -1,6 +1,6 @@
 # metasocli
 
-当前源码快照为 `metasocli-0.1.0-snapshot-20261107-image-replace`。恢复时使用该标签或其完整 Git 提交号。[同 ID 一次换图版本记录](docs/VERSION_SNAPSHOT_20261107_IMAGE_REPLACEMENT.md)
+当前源码快照为 `metasocli-0.1.0-snapshot-20261107-prompt-replace`。恢复时使用该标签或其完整 Git 提交号。[一次换提示词版本记录](docs/VERSION_SNAPSHOT_20261107_PROMPT_REPLACEMENT.md)；[上一版同 ID 换图记录](docs/VERSION_SNAPSHOT_20261107_IMAGE_REPLACEMENT.md)。
 
 独立的 Node.js / TypeScript CLI，将完整剧本或成品视频提示词整理为 Metaso `MiniMax-H3` 请求计划，并管理提交、查询、恢复及视频下载。当前版本 **0.1.0**。2026-09-21 起默认视频请求明确启用 `context_ir_enabled:true`；本次切换只做离线验证，没有发起付费生成。
 
@@ -233,3 +233,13 @@ node E:\metasocli\dist\cli\main.js generate --root <story> --plan <planId> --seg
 # 图片固定准备/结果交接增量（2026-11-02）
 
 本地开发入口新增 `images prepare --root <story> --batch <image-batch.json>` 与 `images collect --root <story> --preparation <id>`，原 `images run/status/resume/retry` 可加 `--summary`。完整命令、清单与恢复说明见 [图片 API 用法](docs/IMAGE_API_USAGE.md#固定准备与结果收集2026-11-02)。prepare/collect 只做本地校验和证据交接，不发起网络或收费调用；运行仍沿用原授权。旧故事与旧正式计划无需迁移，原命令继续可用。
+
+## 指定段提示词替换
+
+已确定完整新稿时：
+
+```text
+node dist/cli/main.js prompts replace --root <story> --episode <原集ID> --segment <原段ID> --file <完整新稿.txt>
+```
+
+三个成品入口共用[一次本地替换](docs/PROMPT_REPLACEMENT.md)，核验紧凑回执后结束。仅支持现有 video-prompts；保留资产、引用顺序、时长和其他段正文，内部调整本集源文位置及必要旁白 cues。支持原始文件 SHA-256、旧正文哈希并发保护、显式旁白映射和幂等恢复；不加载凭据或读媒体，不联网、不生成、不导出。旧未提交计划需重新冻结；已受理任务仍用原 taskId 恢复。
