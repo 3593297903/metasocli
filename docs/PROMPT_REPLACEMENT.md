@@ -69,4 +69,4 @@ $receipt | ConvertTo-Json -Depth 8 -Compress
 
 旧未提交计划因 revision 变化失效，按最新正式 Story 重新冻结；本命令不建计划、不改旧 Plan/Batch/Job/Receipt。已受理任务仍按原 operationId/taskId 查询下载，不能把新稿套进旧请求。辅助 current-*.json、导出 TXT 不是 Core 真相，不可用它们覆盖新稿；只在用户另要求时刷新导出。
 
-用户同时明确要求视频时，换稿回执后按原 [video execute](VIDEO_EXECUTE.md) 授权和范围冻结最新 Story，不重复询问同一目的地授权。只有换稿时到此结束，不生图、不视频、不整理图库。本功能离线可验，不代表真实供应商生成验收。
+用户同时明确要求视频时，核验换稿回执后按 [video run](VIDEO_EXECUTE.md#固定视频入口) 的原授权和范围一次执行最新 Story，不重复询问同一目的地授权。只有换稿时到此结束，不生图、不视频、不整理图库。本功能离线可验，不代表真实供应商生成验收。

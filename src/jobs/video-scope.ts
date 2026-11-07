@@ -15,7 +15,7 @@ import { batchSelection, freezeBatchPlan, loadBatch } from './batch-store.js';
 const Binding = z.object({schemaVersion:z.literal(1), projectId:z.uuid(), scopeHash:Hash, batchId:z.uuid(), batchHash:Hash}).strict();
 export interface VideoScope { episodes?: string[]; selection?: unknown; concurrency?: number; expectScope?: string }
 type Segment = {episodeId:string; segmentId:string};
-function scopeHash(projectId:string, revision:number, manifestHash:string, segments:Segment[], concurrency:number) {
+export function videoScopeHash(projectId:string, revision:number, manifestHash:string, segments:Segment[], concurrency:number) {
   return canonicalSha256({schemaVersion:1, workflow:'h3-inline-ir', projectId, revision, manifestHash, segments, concurrency});
 }
 export async function frozenScope(root:string, plan:VideoBatchPlan) {
@@ -24,7 +24,7 @@ export async function frozenScope(root:string, plan:VideoBatchPlan) {
   const {revision, manifestHash} = parents[0]!;
   if (parents.some(p=>p.revision!==revision || p.manifestHash!==manifestHash)) fail('BATCH_TAMPERED','Batch parents describe different story versions: '+plan.batchId);
   const segments = plan.items.map(({episodeId,segmentId})=>({episodeId,segmentId}));
-  return {revision, manifestHash, scopeHash:scopeHash(plan.projectId, revision, manifestHash, segments, plan.concurrency)};
+  return {revision, manifestHash, scopeHash:videoScopeHash(plan.projectId, revision, manifestHash, segments, plan.concurrency)};
 }
 async function verifyCandidate<T>(id:string,read:()=>Promise<T>){
   try{return await read();}
@@ -42,7 +42,7 @@ export async function resolveVideoScope(root:string, input:VideoScope, checkpoin
     const story = await loadStory(root), manifestHash = canonicalSha256(story);
     const selection = batchSelection(story,input);
     const segments = selection.flatMap(({episodeId,segmentIds})=>segmentIds.map(segmentId=>({episodeId,segmentId})));
-    const hash = scopeHash(story.projectId,story.revision,manifestHash,segments,concurrency);
+    const hash = videoScopeHash(story.projectId,story.revision,manifestHash,segments,concurrency);
     if (input.expectScope !== undefined && parse(Hash,input.expectScope)!==hash) fail('VIDEO_SCOPE_CHANGED','Current project, version, ordered segments or concurrency differs from --expect-scope. Prepare the intended scope again.');
     const file = await projectPath(root,'.metasocli/video-executions/by-scope/'+hash+'.json');
     if (await exists(file)) {

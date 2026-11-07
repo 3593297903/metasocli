@@ -5,13 +5,15 @@ description: 沿用 metasocli 成品视频提示词流程，为明确含画外�
 
 # 成品视频提示词入口（统一旁白参考）
 
-用户要求把明确集段换成已定稿的完整提示词时，先读并执行[指定段提示词一次替换](../../docs/PROMPT_REPLACEMENT.md)：沿用原集 ID/段 ID，一次本地调用核对文件哈希、执行一次 prompts replace 并核验回执；仅要求换稿时到此结束。此分支先于下面的图片授权、模板、全文导入、工作流及视频文档读取；不改资产图、配方、图序、时长或其他段正文，已有旁白只按新稿安全保留/映射原声音。被其他入口继承时不重复执行。用户同时明确要求视频或其他操作时，也先完成此次固定换稿，再进入对应原流程并沿用其授权范围。
+用户要求把明确集段换成已定稿的完整提示词时，先读并执行[指定段提示词一次替换](../../docs/PROMPT_REPLACEMENT.md)：沿用原集 ID/段 ID，一次本地调用核对文件哈希、执行一次 prompts replace 并核验回执；仅要求换稿时到此结束。此分支先于下面的图片授权、模板、全文导入、工作流及视频文档读取；不改资产图、配方、图序、时长或其他段正文，已有旁白只按新稿安全保留/映射原声音。被其他入口继承时不重复执行。用户同时明确要求视频或其他操作时，按用户指定的替换顺序完成各自固定入口，再进入对应流程并沿用其授权范围。
 
 用户明确要求生成视频时，随原有说明同次读取安装根下可选的 `.local/video-execution-authorization.md`，按[本机视频授权](../../docs/VIDEO_EXECUTE.md#本机视频授权)用于原提交。按各段实际绑定列出旁白音频。需要选稿或换参考素材时，按[首次确认](../../docs/VIDEO_EXECUTE.md#改稿或换参考素材时的首次确认)只问尚待用户决定的事项。
 
 用户说“把资产图换成这张”且已选定本机图片时，默认按[同 ID 纯换图判断](../metasocli-reference-images/references/selected-local-image.md)处理。目标唯一就沿用原资产 ID，即使选图已登记在另一个 ID 下，也在一次本地调用中核对选图 SHA-256、登记一次、校验并交付回执，到此结束。同时明确授权换图和指定段视频时，先登记再按新版清单冻结所选段。
 
-明确授权生成视频时执行 [video execute 一次执行](../../docs/VIDEO_EXECUTE.md)，已有准确批次优先按 ID 恢复、下载并交付。下文批次规则仍规定授权范围、未知保护和四名额调度。
+当前正式 Story 的所选集段、完整提示词、参考图及旁白已就绪且用户要求视频时，直接使用[固定视频入口 video run](../../docs/VIDEO_EXECUTE.md#固定视频入口)，一次调用完成本地准备、范围核对、提交/查询/下载和交付；本分支先于下面的图片授权、模板、全文导入和图片工作流读取，被其他入口继承时不重复执行。已有准确 batchId 直接按原 ID 恢复。不要为此另做 import、assets list、doctor、图库/ZIP、全剧 TXT 或 current 指针。直接交付返回的正式文件路径和回执，不再复制或登记成片；仅用户明确要求音视频解码时加 --verify-av，视觉抽查另列结果。
+
+只换图或只换稿时仍执行上面的单次本地入口并结束，video run 调用次数为0。同时明确要求换图、换稿和视频时，按用户顺序执行各一次原替换命令，逐份核验回执，再以最新正式 Story 调用一次 video run；可在同一宿主调用中顺序完成。任一步失败立即停，不自动撤销此前已成功的替换，报告已完成事项和视频尚未提交。runner 本身不代登记、改稿或导入。尚缺素材、未定稿、旁白归属不明或范围不明时，先走原流程补齐必要输入，不把它当作就绪视频。下文批次规则继续限定授权、未知保护和四名额调度。
 
 开始执行就完整读取 [已有图片授权与提交上下文](../../docs/IMAGE_EXECUTION_AUTHORIZATION.md)，不要等到付费提交被拒绝后才读取。用户已要求的当前图片范围直接沿用已有发送授权，实际工具调用明确带上授权来源、目的地和冻结范围；正常审批仍适用。本入口的视频授权规则另行保留。
 
@@ -63,11 +65,11 @@ node E:\metasocli\dist\cli\main.js assets register --root <story> --id narrator-
 
 ## 计划、生成与恢复
 
-后续使用 [剧本入口的公开命令与恢复规则](../metasocli/SKILL.md)，并完整读取 [当前 Context IR 流程](../../docs/INLINE_CONTEXT_IR_WORKFLOW.md)。新草稿段参数 `contextIr` 写 true，由 `video execute` 本地准备冻结所选集的 h3-inline-ir 父计划和所选段，核对 `contextIr:true`。按剧本入口批次规则，将选定全部集和段离线冻结为一个 `video execute --root <story> --episodes <有序集ID> --concurrency 4`；部分段用 `--selection <selection.json>`，不按标题重拆技术 episodeId，不按8段截断。展示 `batchId`、哈希和总数/复用/活动/待提交数，默认停在视频提交前。用户授权当前范围及含 IR 的视频模式后，直接 `video execute --root <story> --batch <batchId> --confirm`，不逐段或每4段请求批准，也不先单独执行 context-ir 或 plan --from-context-ir。
+后续使用 [剧本入口的公开命令与恢复规则](../metasocli/SKILL.md)，并完整读取 [当前 Context IR 流程](../../docs/INLINE_CONTEXT_IR_WORKFLOW.md)。新草稿段参数 `contextIr` 写 true，由 `video run` 本地准备冻结所选集的 h3-inline-ir 父计划和所选段，核对 `contextIr:true`。按剧本入口批次规则，将选定全部集和段离线冻结为一个 `video run --root <story> --episodes <有序集ID> --concurrency 4`；部分段用 `--selection <selection.json>`，不按标题重拆技术 episodeId，不按8段截断。展示 `batchId`、哈希和总数/复用/活动/待提交数，默认停在视频提交前。用户授权当前范围及含 IR 的视频模式后，直接 `video run --root <story> --batch <batchId> --confirm`，不逐段或每4段请求批准，也不先单独执行 context-ir 或 plan --from-context-ir。
 
 最多4段占用生成名额，任一服务端终态验证并持久化后补下一段，task_id 不代表完成；最多2个独立下载，慢下载不堵塞补位。有旁白的段继续绑定原参考音频，没有旁白的段不添加音频，乱序完成不改变图序、cues、资产归属或输出路径。按用户明确集序、原段序提交；独立 IR 历史范围不明时使用显式选择，不自动把副本纳入 `--all-episodes`。
 
-中断后 `video execute --root <story> --batch <batchId>` 本地核对现状；已有准确范围授权时同一命令加 `--confirm` 沿用原 ID 和保存授权，允许继续原范围内未提交段。旧 `resume --operation` 不创建新任务。复用合格成片，下载失败只恢复下载；未显式确认的未知创建保留占位并暂停新增，明确失败不自动重做，安全429仅在持久化预算内退避。多个新版入口共用安装名额，不能通过并开终端或换运行目录绕过。
+中断后 `video run --root <story> --batch <batchId>` 本地核对现状；已有准确范围授权时同一命令加 `--confirm` 沿用原 ID 和保存授权，允许继续原范围内未提交段。旧 `resume --operation` 不创建新任务。复用合格成片，下载失败只恢复下载；未显式确认的未知创建保留占位并暂停新增，明确失败不自动重做，安全429仅在持久化预算内退避。多个新版入口共用安装名额，不能通过并开终端或换运行目录绕过。
 
 计划应展示：原参考图顺序、旁白音频哈希、音频时长、各段旁白范围、最终提示词及模型参数。有旁白的请求会包含 `audio_url` / `role: reference_audio`，与图片共同进入 Metaso H3 多模态参考模式；没有 LibTV 节点、连线或旧 CLI。
 

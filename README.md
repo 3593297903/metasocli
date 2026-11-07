@@ -1,6 +1,6 @@
 # metasocli
 
-当前源码快照为 `metasocli-0.1.0-snapshot-20261107-prompt-replace`。恢复时使用该标签或其完整 Git 提交号。[一次换提示词版本记录](docs/VERSION_SNAPSHOT_20261107_PROMPT_REPLACEMENT.md)；[上一版同 ID 换图记录](docs/VERSION_SNAPSHOT_20261107_IMAGE_REPLACEMENT.md)。
+当前源码快照为 `metasocli-0.1.0-snapshot-20261107-video-run`。恢复时使用该标签或其完整 Git 提交号。[一次视频流程与复用标记版本记录](docs/VERSION_SNAPSHOT_20261107_VIDEO_RUN.md)；[上一版换提示词记录](docs/VERSION_SNAPSHOT_20261107_PROMPT_REPLACEMENT.md)；[同 ID 换图记录](docs/VERSION_SNAPSHOT_20261107_IMAGE_REPLACEMENT.md)。
 
 独立的 Node.js / TypeScript CLI，将完整剧本或成品视频提示词整理为 Metaso `MiniMax-H3` 请求计划，并管理提交、查询、恢复及视频下载。当前版本 **0.1.0**。2026-09-21 起默认视频请求明确启用 `context_ir_enabled:true`；本次切换只做离线验证，没有发起付费生成。
 
@@ -111,7 +111,7 @@ node $cli plan --root $story --episode ep-script --workflow h3-inline-ir
 
 ## 授权后的生成与恢复
 
-三个视频 Skill（普通、旁白、metasoclitk）共用 `video execute`。例如，准备假故事第一集的有序选段可用 `node $cli video execute --root $story --selection $selectionFile`。本地 JSON 给出 batchId、scopeHash、实际集段与计数。得到覆盖这些段、素材及内联 IR 费用的视频授权后，执行 `node $cli video execute --root $story --batch $batchId --confirm`。程序持续补位、查询、下载并返回已校验的 MP4 路径。重复同一批次沿用原任务。单独重建交付用同一命令省略 `--confirm`；明确要求音视频全片解码时另加 `--verify-av`。[范围授权与一次宿主调用示例](docs/VIDEO_EXECUTE.md)
+三个视频 Skill（普通、旁白、metasoclitk）共用 `video run`。例如，已授权的假故事有序选段可用 `node $cli video run --root $story --selection $selectionFile --confirm` 一次执行；省略 confirm 只本地准备。JSON 给出 batchId、scopeHash、实际集段与计数。已有准确批次按 `node $cli video run --root $story --batch $batchId --confirm` 恢复。程序持续补位、查询、下载并返回已校验的 MP4 路径。重复同一批次沿用原任务。单独重建交付用同一命令省略 `--confirm`；明确要求音视频全片解码时另加 `--verify-av`。[范围授权与一次宿主调用示例](docs/VIDEO_EXECUTE.md)
 
 已选本机图片时，只需说“把薇拉的资产图换成这张”。三个视频入口默认让原资产 ID 的所有引用采用选图，沿用原提示词和配方。即使选图已经登记在另一个 ID 下，目标唯一就只对原 ID 执行一次 `assets register`，在同一次本地调用中核对 SHA-256、校验并返回回执。只改指定镜头或另需导出图库时，说明所需范围即可。若同时授权了指定段的视频，先登记再冻结新版批次。[纯换图范围与来源](skills/metasocli-reference-images/references/selected-local-image.md)
 
@@ -243,3 +243,9 @@ node dist/cli/main.js prompts replace --root <story> --episode <原集ID> --segm
 ```
 
 三个成品入口共用[一次本地替换](docs/PROMPT_REPLACEMENT.md)，核验紧凑回执后结束。仅支持现有 video-prompts；保留资产、引用顺序、时长和其他段正文，内部调整本集源文位置及必要旁白 cues。支持原始文件 SHA-256、旧正文哈希并发保护、显式旁白映射和幂等恢复；不加载凭据或读媒体，不联网、不生成、不导出。旧未提交计划需重新冻结；已受理任务仍用原 taskId 恢复。
+
+## 固定视频入口 video run
+
+已就绪的选段使用一次正式调用：`node dist/cli/main.js video run --root <story> --selection <selection.json> --confirm`。整集可换为 `--episodes <有序集ID>`，恢复使用 `--batch <准确batchId>`；三个范围互斥。不加 confirm 仅本地准备/状态/交付。它核对冻结范围后调用原 video execute，保留四生成/两下载、原任务恢复和未知不重发规则；旧 video execute 的 expect-scope 要求不变。完整命令、共享 Skill 样例与授权范围见 [视频执行](docs/VIDEO_EXECUTE.md#固定视频入口)。
+
+回执含批次/段/原任务身份、正式输出文件及 SHA-256、阶段计时。复用成片标记 reused；partial 或 delivery_incomplete 不冒充完成。先换图/换稿时分别核验原固定入口回执再运行视频；纯替换到此结束。本功能离线测试不等于供应商真实生成验收。

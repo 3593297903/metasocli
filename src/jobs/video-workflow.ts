@@ -111,7 +111,7 @@ async function delivery(root:string, snapshot:Snapshot, inspection:BatchInspecti
   return fail('DELIVERY_CHANGED','The formal state changed during delivery.');
 }
 
-export async function executeVideo(root:string,input:Input,deps:VideoWorkflowDependencies) {
+export async function executeVideo(root:string,input:Input,deps:VideoWorkflowDependencies,observeInitialReuse?:(ready:boolean)=>void) {
   if ([input.batch,input.selection,input.episodes].filter(v=>v!==undefined).length!==1) fail('BATCH_SCOPE','Use exactly one of --batch, --selection or --episodes.');
   if (input.batch!==undefined && (input.concurrency!==undefined || input.expectScope!==undefined)) fail('CLI_ARGUMENT','A batch ID already fixes the scope and concurrency.');
   if (input.batch===undefined && input.confirm && input.expectScope===undefined) fail('VIDEO_SCOPE_REQUIRED','Prepare the scope first and use its batchId or --expect-scope.');
@@ -120,6 +120,7 @@ export async function executeVideo(root:string,input:Input,deps:VideoWorkflowDep
   const frozen=await frozenScope(root,plan), inspection=new BatchInspection();
   const issues=new Map<string,RecoveryIssue>();
   let snapshot=await batchStatus(root,plan.batchId,inspection);
+  observeInitialReuse?.(snapshot.summary.total>0 && snapshot.summary.reusable===snapshot.summary.total);
   const unfinishedLink = snapshot.run?.trace.some(choice => {
     if (choice.event !== 'batch-retry-linked' || choice.order === undefined || !choice.operationId) return false;
     const original = snapshot.items[choice.order]?.job;

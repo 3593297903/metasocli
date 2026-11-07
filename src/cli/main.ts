@@ -24,6 +24,7 @@ import { z } from 'zod';
 import { createBatchPlan, batchStatus, loadBatch, loadBatchRun } from '../jobs/batch-store.js';
 import { runBatch, authorizeBatchRetry } from '../jobs/batch.js';
 import { executeVideo, type VideoWorkflowDependencies } from '../jobs/video-workflow.js';
+import { runVideo } from '../jobs/video-run.js';
 import { listVideoRetries, retryProgress } from '../jobs/video-retry.js';
 import { reconcileRuntime, occupied, inspectRuntime, capacitySnapshot } from '../jobs/coordinator.js';
 import { createImagePlan, loadImageProfile } from '../images/planning.js';
@@ -79,6 +80,8 @@ batch retry --root <path> --batch <id> --operation <local-operation-id> --confir
 batch status --root <path> --batch <id>
   batch run/resume/retry: [--capacity-wait-ms <0..300000>] [--capacity-poll-ms <10..60000>] (30000 / 250 defaults)
 batch register --root <path>  Register known existing tasks in the shared installation capacity ledger.
+video run --root <path> (--batch <id>|--selection <json>|--episodes <ordered,ids>) [--confirm] [--verify-av]
+  One invocation: local prepare, checked scope handoff, existing execution and delivery. Without confirm: local only.
 video execute --root <path> (--batch <id>|--selection <json>|--episodes <ordered,ids>) [--verify-av]
   Without --confirm: local preparation/status/delivery only. Prefer --batch <id> --confirm to execute.
   Selector confirmation requires --expect-scope <scopeHash>. Optional selector --concurrency <1..4>.
@@ -140,6 +143,7 @@ const flags: Record<string, { strings?: string[]; booleans?: string[] }> = {
   'batch retry': { strings: ['batch', 'operation', 'max-polls', 'poll-ms', 'scheduler-wait-ms', 'capacity-wait-ms', 'capacity-poll-ms'], booleans: ['confirm', 'accept-unknown-result'] },
   'batch status': { strings: ['batch'] }, 'batch register': {},
   'video execute': { strings:['batch','selection','episodes','concurrency','expect-scope','max-polls','poll-ms','scheduler-wait-ms','capacity-wait-ms','capacity-poll-ms'], booleans:['confirm','verify-av'] },
+  'video run': { strings:['batch','selection','episodes','concurrency','expect-scope','max-polls','poll-ms','scheduler-wait-ms','capacity-wait-ms','capacity-poll-ms'], booleans:['confirm','verify-av'] },
   'images auth-status': {},
   'images prepare': { strings:['batch','preparation','python'] },
   'images collect': { strings:['preparation','python'] },
@@ -177,7 +181,7 @@ export async function runCli(args: string[], injected?: VideoWorkflowDependencie
     let v: Record<string, Value>;
     try {
       const parsed = parseArgs({ args: args.slice(count), options, strict: true, allowPositionals: false, tokens: true });
-      if (command === 'video execute' || command === 'prompts replace') {
+      if (command === 'video execute' || command === 'video run' || command === 'prompts replace') {
         const names = parsed.tokens.filter(token => token.kind === 'option').map(token => token.name);
         if (new Set(names).size !== names.length) fail('CLI_ARGUMENT', 'Specify each option once.');
       }
@@ -233,8 +237,8 @@ export async function runCli(args: string[], injected?: VideoWorkflowDependencie
       return { client: injected.irClient, fetcher: injected.fetcher, persistence: injected.irPersistence, sleep: injected.sleep };
     };
     if (command === 'init') return { exitCode: 0, data: await initializeStory(root, typeof v.name === 'string' ? v.name : basename(root)) };
-    if (command === 'video execute') {
-      return await executeVideo(root,{
+    if (command === 'video execute' || command === 'video run') {
+      return await (command === 'video run' ? runVideo : executeVideo)(root,{
         ...(v.batch===undefined?{}:{batch:required(v,'batch')}),
         ...(v.selection===undefined?{}:{selection:await readJson(resolve(required(v,'selection')))}),
         ...(v.episodes===undefined?{}:{episodes:required(v,'episodes').split(',').map(s=>s.trim())}),
@@ -360,9 +364,9 @@ export async function runCli(args: string[], injected?: VideoWorkflowDependencie
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const args = process.argv.slice(2);
   const result = await runCli(args);
-  // video execute emits a bounded projection of local IDs/paths/status codes.
+  // video execute/run emit a bounded projection of local IDs/paths/status codes.
   // Printing it (including a purely local delivery) needs no credential access.
-  const secrets = (args[0] === 'video' && args[1] === 'execute') || (args[0] === 'prompts' && args[1] === 'replace') ? [] : [process.env.METASO_API_KEY ?? '', process.env.METASOCLI_IMAGE_API_KEY ?? ''];
+  const secrets = (args[0] === 'video' && ['execute','run'].includes(args[1] ?? '')) || (args[0] === 'prompts' && args[1] === 'replace') ? [] : [process.env.METASO_API_KEY ?? '', process.env.METASOCLI_IMAGE_API_KEY ?? ''];
   const data = redact(result.data, secrets);
   process.stdout.write(typeof data === 'string' ? `${data}\n` : `${JSON.stringify(data, null, 2)}\n`);
   process.exitCode = result.exitCode;
