@@ -44,7 +44,7 @@ try{
     if(initialPosts.length&&!['http'].includes(point))assert.equal(job.taskId,initialPosts[0].post);
     await runCli(args,{client});assert.equal(initialPosts.length+recoveryPosts,point==='intent'?0:1);
     assert.equal((await readJob(f.root,old.operationId)).status,'submit_unknown');
-    assert.equal(occupied(await reconcileRuntime(f.root)).length,2);
+    assert.equal(occupied(await reconcileRuntime(f.root)).length,['intent','http'].includes(point)?0:1);
     report.push({point,oldOperationId:old.operationId,newOperationId:a.newOperationId,initialPosts:initialPosts.length,recoveryPosts,taskId:job.taskId,status:job.status,possibleOccupied:2});
     console.log('PASS explicit retry process '+point+': stable identity; no duplicate POST; old unknown retained');
   }
@@ -90,7 +90,9 @@ try{
     assert.equal((await readJob(f.root,old.operationId)).status,'failed');
     assert.equal((await readJob(f.root,grant.job.operationId)).lastError.code,'RETRY_SUPERSEDED');
     assert.deepEqual(await readFile(authFile),authBytes);assert.equal((await listJobs(f.root)).length,3);
-    assert.deepEqual(occupied(await reconcileRuntime(f.root)).map(s=>s.operationId),[c.operationId]);
+    const ledger=await reconcileRuntime(f.root);
+    assert.deepEqual(occupied(ledger).map(s=>s.operationId),['intent','http'].includes(stage)?[]:[c.operationId]);
+    assert.equal(ledger.slots.find(s=>s.operationId===c.operationId).capacity.state,['intent','http'].includes(stage)?'released':'held');
     report.push({point,oldOperationId:old.operationId,supersededOperationId:grant.job.operationId,newOperationId:c.operationId,originalPosts,initialPosts:initialPosts.length,recoveryPosts,taskId:job.taskId,status:job.status,attempt:3,historyRetained:true,batchOperationId:batch.run.items[0].operationId});
     console.log('PASS recovered failure retry process '+stage+': C stable; old grant retained; no duplicate POST; batch indexes C');
   }

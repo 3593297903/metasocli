@@ -29,7 +29,7 @@ try{
     const before=(await listJobs(f.root))[0],initialPosts=w.messages.filter(m=>m.post).length;let recoveryPosts=0;
     const client={async create(){recoveryPosts++;return {taskId:'recovery-'+point,evidence};},async query(taskId){return {taskId,status:'generated',rawStatus:'succeeded',duration:7,url:'https://example.com/fake.mp4',evidence};}};
     const result=await runBatch(f.root,f.batchId,false,{client,fetcher:async()=>new Response(fakeMp4())},{pollIntervalMs:0,maxPolls:1});
-    if(['intent','http'].includes(point)){assert.equal(before.status,'submit_unknown');assert.equal(recoveryPosts,0);assert.equal(result.run.status,'needs_attention');assert.equal(occupied(await reconcileRuntime(f.root)).length,1);}
+    if(['intent','http'].includes(point)){assert.equal(before.status,'submit_unknown');assert.equal(recoveryPosts,0);assert.equal(result.run.status,'needs_attention');assert.equal(occupied(await reconcileRuntime(f.root)).length,0);}
     else{assert.equal(result.run.status,'complete');assert.equal(recoveryPosts,point==='reserved'?1:0);if(before.taskId)assert.equal(result.items[0].job.taskId,before.taskId);}
     assert.equal(initialPosts+recoveryPosts,point==='intent'?0:1);
     report.push({point,initialPosts,recoveryPosts,before:before.status,after:result.run.status,originalTaskPreserved:!before.taskId||result.items[0].job.taskId===before.taskId});

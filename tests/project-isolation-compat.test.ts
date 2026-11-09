@@ -42,7 +42,11 @@ it('C5/C6: accepted or terminal ledger evidence cannot become a fresh prepared P
   const rollback={...job,status:'prepared' as const};delete rollback.taskId;delete rollback.submittedAt;await persistence.job(f.root,rollback);await unlink(await receiptPath(f.root,job.operationId));
   await expect(submit(f.root,p.planId,'s1',true,deps)).rejects.toMatchObject({code:'COORDINATOR_CONFLICT'});
   expect((await inspectRuntime()).slots.find(s=>s.operationId===job.operationId)).toEqual(before);expect(posts).toBe(1);
-  expect(occupied({...await inspectRuntime(),slots:[{...before,status:'prepared'}]})).toHaveLength(1);
+  // Business rollback cannot revive a terminal R3 capacity decision. Legacy
+  // records without that decision still conservatively protect their accepted ID.
+  expect(occupied({...await inspectRuntime(),slots:[{...before,status:'prepared'}]})).toHaveLength(0);
+  const {capacity,...legacy}=before;
+  expect(occupied({...await inspectRuntime(),slots:[{...legacy,status:'prepared'}]})).toHaveLength(1);
   records.push({case:'C5/C6-ledger-evidence',operationId:job.operationId,taskId:before.taskId,terminal:before.status,posts,recoveryExtraPosts:0});
 });
 

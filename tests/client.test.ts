@@ -26,7 +26,10 @@ it('does not turn unknown states or inconsistent identities into queued/success'
   const client = new MetasoClient('key', async () => json({ task: { id: 'a', status: 'suspended_by_vendor' } }));
   expect((await client.query('a')).status).toBe('unknown');
   await expect(client.query('b')).rejects.toMatchObject({ code: 'QUERY_CONTRACT' });
-  await expect(new MetasoClient('key', async () => json({ id: 'a', status: 'succeeded' })).query('a')).rejects.toMatchObject({ code: 'QUERY_CONTRACT' });
+  // A trusted terminal identity frees generation capacity; missing delivery
+  // metadata stays missing and is rejected by resume, rather than inventing a URL.
+  const terminal=await new MetasoClient('key', async () => json({ id: 'a', status: 'succeeded' })).query('a');
+  expect(terminal).toMatchObject({taskId:'a',status:'generated'});expect(terminal.url).toBeUndefined();
 });
 it('never retries creation itself; distinguishes rejection, ambiguity and read retry hints', async () => {
   let count = 0;

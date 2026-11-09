@@ -23,13 +23,14 @@ async function setup(count=2) {
  const args=['batch','retry','--root',f.root,'--batch',f.batch.plan.batchId,'--operation',failed.operationId,'--confirm','--poll-ms','0'];
  return {...f,old,lost,failed,deps,args,get posts(){return posts;},setMode(value:typeof mode){mode=value;}};
 }
-it('after a confirmed 402 failure, retries once inside the original acknowledged batch, preserves the old slot, and continues the remaining authorized items',async()=>{
+it('after a confirmed 402 failure, retries once inside the original acknowledged batch, preserves the released old unknown, and continues authorized items',async()=>{
  const f=await setup();f.setMode('success');
  const result=await runCli(f.args,f.deps);
  expect(result).toMatchObject({exitCode:0,data:{summary:{reusable:2},run:{status:'complete'}}});expect(f.posts).toBe(3);
  expect((await listJobs(f.root)).filter(j=>j.retryOf===f.failed.operationId)).toHaveLength(1);
  expect(await readJob(f.root,f.failed.operationId)).toMatchObject({status:'failed'});
- expect(occupied(await reconcileRuntime(f.root))).toMatchObject([{operationId:f.lost.operationId,status:'submit_unknown'}]);
+ expect(occupied(await reconcileRuntime(f.root))).toHaveLength(0);
+ expect((await reconcileRuntime(f.root)).slots.find(s=>s.operationId===f.lost.operationId)).toMatchObject({status:'submit_unknown',capacity:{state:'released'}});
  await runCli(f.args,f.deps);expect(f.posts).toBe(3);
 },60000);
 it('persists the explicit failed retry before dispatch, so an ordinary batch resume survives interruption before the POST',async()=>{

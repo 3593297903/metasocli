@@ -259,20 +259,20 @@ test('a restricted batch stays restricted through selector and exact batch runne
   expect((await loadBatchRun(f.root,f.batch.plan))!.authorization).toEqual(grant);expect(net.calls.post).toBe(1);
 },60000);
 
-test('eight segments sustain four generation slots and two downloads; foreign unknown keeps its slot only',async()=>{
+test('eight segments sustain four generation slots and two downloads; foreign ended unknown is preserved with released capacity',async()=>{
   const a=await batchFixture([8]),b=await batchFixture([1]),runtime=join(dirname(a.root),'shared'),other=b.batch.plan.items[0]!;
   const unknown=await submit(b.root,other.planId,other.segmentId,true,{runtimeRoot:runtime,client:{async create(){throw Error('lost');},async query(){throw Error('no foreign query');}}});
   let active=0,peak=0,downloads=0,peakDownloads=0,release!:()=>void;
   const gate=new Promise<void>(r=>release=r),posts:number[]=[],trace:unknown[]=[],live=new Set<string>();
   const result=await run(a.root,['--episodes','ep-z','--confirm','--poll-ms','5','--max-polls','720'],{runtimeRoot:runtime,client:{
-    async create(r){const n=posts.length+1;posts.push(n);active++;peak=Math.max(peak,active);trace.push({event:'post',n,active});expect(active).toBeLessThanOrEqual(3);
+    async create(r){const n=posts.length+1;posts.push(n);active++;peak=Math.max(peak,active);trace.push({event:'post',n,active});expect(active).toBeLessThanOrEqual(4);
       live.add(String(n));
-      expect(r.context_ir_enabled).toBe(true);if(n===4)expect((await listJobs(a.root)).some(j=>['generated','downloaded'].includes(j.status))).toBe(true);
+      expect(r.context_ir_enabled).toBe(true);if(n===5)expect((await listJobs(a.root)).some(j=>['generated','downloaded'].includes(j.status))).toBe(true);
       if(n===8)release();return {taskId:String(n),evidence};},
     async query(id){if(['1','2'].includes(id)&&posts.length<5)return {taskId:id,status:'running',rawStatus:'running',evidence};
       if(live.delete(id))active--;trace.push({event:'terminal',id});return success(id);}},
     fetcher:async()=>{downloads++;peakDownloads=Math.max(peakDownloads,downloads);try{await gate;return new Response(mp4(7));}finally{downloads--;}}});
-  release();expect(result.exitCode).toBe(0);expect(posts).toEqual([1,2,3,4,5,6,7,8]);expect(peak).toBe(3);expect(peakDownloads).toBe(2);
+  release();expect(result.exitCode).toBe(0);expect(posts).toEqual([1,2,3,4,5,6,7,8]);expect(peak).toBe(4);expect(peakDownloads).toBe(2);
   expect((await inspectRuntime(runtime)).slots.find(s=>s.operationId===unknown.operationId)?.status).toBe('submit_unknown');
-  await record('capacity',{peakWithForeignUnknown:peak+1,peakDownloads,posts,trace,unknown:unknown.operationId});
+  await record('capacity',{peakKnownHeld:peak,peakDownloads,posts,trace,unknown:unknown.operationId});
 },120000);

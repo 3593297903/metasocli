@@ -25,6 +25,11 @@ description: 沿用 metasocli 成品视频提示词流程，以 jianc 风格的�
 
 故事目录仍单独显式传 `--root`，不因升级移动或重建旧故事、凭据和运行账本。新设备无需存在 `E:\libcli` 或 jianc 项目；旧项目的只读保护仍有效。安装、升级与用户级入口说明见 [部署说明](../../docs/METASOCLITK_DEPLOYMENT.md)。
 
+## 视频容量默认策略（R3）
+
+完整遵循 [R3自动释放与派发规则](../../docs/VIDEO_CAPACITY_POLICY.md)，它覆盖旧批次说明中的永久未知占位规则。仍使用原一次 video run；无额外用户确认。只换图、只换稿、图片配方及旁白语义保持原样。释放仅是本地容量决定，不是成功、远端取消或再次收费授权；有原ID就恢复原ID。
+
+
 ## 接入原流程
 
 1. 完整读取同包 [成品视频提示词入口](../metasocli-video-prompts/SKILL.md)，按其处理完整输入、故事目录、分段、图序和生成授权。程序仍是本包 `dist/cli/main.js`，所有业务命令显式传 `--root <story>`。本技能不另建 CLI、账户、运行账本或生图接口。
@@ -56,9 +61,9 @@ $metasoclitk
 
 ## 不同故事隔离与恢复
 
-完整遵循 [项目隔离与冷切换](../../docs/PROJECT_ISOLATION.md)。不同故事的缺图、依赖等待、暂停、未知或目录异常不阻止本故事使用空余容量；同故事锁、阶段互斥、未知阻断和一次性重试规则保留。默认不要求 --accept-existing-unknown；旧确认仅保留审计身份，不扩大授权或重发未知。
+完整遵循 [项目隔离与冷切换](../../docs/PROJECT_ISOLATION.md)。不同故事的缺图、依赖等待、暂停、未知或目录异常不阻止本故事使用空余容量；同故事锁、阶段互斥、同一集段同输入未知防重和一次性重试规则保留。默认不要求 --accept-existing-unknown；旧确认仅保留审计身份，不扩大授权或重发未知。
 
-图片保持 gpt-image-2.5 / all-ready / 有效600秒，配置的 concurrent/RPM 共享核验。视频保持 MiniMax-H3、context_ir_enabled:true，全机同 runtime 合计最多4个生成名额，项目 concurrency 为附加上限；1个外部未知留下3个空位，4个未知则新增视频等待，图片与原结果恢复仍可运行。不得删除旧未知、换 runtime 或伪造终态腾位。
+图片保持 gpt-image-2.5 / all-ready / 有效600秒，配置的 concurrent/RPM 共享核验。视频保持 MiniMax-H3、context_ir_enabled:true，全机同 runtime 合计最多4个当前已知有效占位，项目 concurrency 为附加上限；未知创建异常结束/执行者退出、实际GET失败、外部证据不可核实时自动释放，原记录保留；新证据证明活跃则恢复，达到或超过4暂停新增。远端真实任务数可能超过4，图片与原结果恢复仍可运行。不得删除旧未知、换 runtime 或伪造终态腾位。
 
 images run/resume/retry 与 batch run/resume/retry 支持 --capacity-wait-ms 30000 --capacity-poll-ms 250。耗尽后保留原计划/批次授权和 operationId，按原 resume 继续；准确区分本项目未知、依赖未就绪、共享容量等待、同项目进程占锁和协调器损坏。视频批次只查询当前故事，其他故事由其自身恢复落盘终态，不自动跟随外部 GET。
 

@@ -102,8 +102,9 @@ images resume may POST unstarted items ONLY within its saved image authorization
 Image all-ready starts every ready request independently (n=1); no generation-slot pool or automatic POST retries.
 Images use METASOCLI_IMAGE_API_KEY / independent encrypted credentials. Real provider capacity remains unverified.
 Video slots are shared (max 4); downloads run separately (max 2). Each story has its own batch/image scheduler.
-Foreign unknowns retain capacity but do not veto free slots. Cold-switch all old schedulers before upgrading.
-An explicit unknown retry can incur duplicate billing: the original unknown retains its slot and history.
+R3 releases ended unknowns, actual query failures and unavailable sources locally, preserving original tasks.
+Fresh active evidence restores capacity; remote work may exceed four after an uncertain release. Cold-switch old writers.
+An explicit unknown retry can incur duplicate billing: the original unknown and its capacity audit remain preserved.
 Repeated retry of the same local operation reuses one stable new attempt; no old remote task ID is required.
 waiting_capacity means authorization saved, not sent. Batch retry prioritizes it as known tasks finish.
 Use --runtime-dir <isolated-directory> or METASO_RUNTIME_DIR for development/tests; production defaults to ~/.metasocli-runtime.
@@ -322,6 +323,7 @@ export async function runCli(args: string[], injected?: VideoWorkflowDependencie
       if (contextIrOperations.some(ir => jobs.some(job => job.operationId === ir.operationId))) fail('OPERATION_CONFLICT', 'Operation ID exists in both namespaces.');
       const videoRetries = await Promise.all((await listVideoRetries(root)).map(a => retryProgress(root, a)));
       return { exitCode: 0, data: { version: '0.1.0', projectId: story.projectId, revision: story.revision, episodes: story.episodes.map(e => e.id), assets, jobs, contextIrOperations, videoRetries,
+        capacity:capacitySnapshot(root,await inspectRuntime(v['runtime-dir'] as string|undefined??injected?.runtimeRoot)),
         ...(command === 'doctor' ? { node: process.version, credentials: await credentialStatus(), missingAssets: assets.filter(a => a.status !== 'ready').map(a => a.assetId), nativeApiVerifiedLive: false } : {}) } };
     }
     if (command === 'attach-task') {

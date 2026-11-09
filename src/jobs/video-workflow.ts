@@ -14,6 +14,8 @@ import { resume } from './resume.js';
 import { frozenScope, resolveVideoScope, type VideoScope, type WorkflowCheckpoint } from './video-scope.js';
 import { verifyAv, type AvCommand } from './video-av.js';
 import { localVideoIssue, outputVersion } from './video.js';
+import { inspectRuntime,capacitySnapshot } from './coordinator.js';
+import { ProviderError } from '../metaso/client.js';
 
 export interface VideoWorkflowDependencies extends JobDependencies {
   workflowCheckpoint?: WorkflowCheckpoint;
@@ -73,12 +75,13 @@ async function delivery(root:string, snapshot:Snapshot, inspection:BatchInspecti
           ? ['download','--root',root,'--operation',job.operationId,'--redownload-missing']
           : ['resume','--root',root,'--operation',job.operationId]} : {})});
     }
+    const capacity=input.confirm?capacitySnapshot(root,await inspectRuntime(deps.runtimeRoot)):undefined;
     const counts=snapshot.summary, complete=counts.reusable===counts.total;
     const prepared=!input.confirm && !stale && !snapshot.run && snapshot.items.every(i=>!i.job);
     const state=complete && segments.every(s=>!s.av || s.av.passed) ? 'complete' : prepared ? 'prepared' : 'partial';
     const data={schemaVersion:1,mode:input.confirm?'execute':'local',state,projectId:snapshot.plan.projectId,
       batchId:snapshot.plan.batchId,batchHash:snapshot.plan.batchHash,scopeHash:frozen.scopeHash,revision:frozen.revision,manifestHash:frozen.manifestHash,
-      counts,segments,generationState:snapshot.run?.status ?? null,
+      counts,segments,generationState:snapshot.run?.status ?? null,...(capacity?{capacity}:{}),
       ...(stale && snapshot.items.some(i=>!i.job?.taskId) && !complete ? {error:{code:'PLAN_STALE',message:'Freeze a new batch for current inputs. Recover listed accepted tasks by their original operation IDs.'}} : {}),
       ...(blocker && !complete ? {error:blocker} : {})};
     if (prepared) return {exitCode:0,data};
@@ -150,16 +153,18 @@ export async function executeVideo(root:string,input:Input,deps:VideoWorkflowDep
     } else if (snapshot.items.every(i=>i.job?.taskId)) {
       // A stale all-accepted batch can only observe/download its original IDs.
       // A mixed stale batch instead returns per-operation recovery commands.
+      let currentAccountFailure=false;
+      const recoveryDeps={...deps,client:{prepare:deps.client.prepare?.bind(deps.client),create:deps.client.create.bind(deps.client),async query(taskId:string){
+        try{return await deps.client.query(taskId);}
+        catch(error){if(error instanceof ProviderError && [401,402,403].includes(error.options.httpStatus??0))currentAccountFailure=true;throw error;}
+      }}};
       for (const item of snapshot.items) {
         if (inspection.outputs.has(item.order) || ['failed','cancelled'].includes(item.job!.status)) continue;
         const job=item.job!;
         if(item.outputIssue && item.outputIssue!=='OUTPUT_MISSING')continue; // preserve existing corrupt evidence
         try {
-          const result=await resume(root,job.operationId,deps,{maxPolls:options.maxPolls,pollIntervalMs:options.pollIntervalMs,redownloadMissing:true,strictDelivery:true});
-          if(result.lastError && !localVideoIssue(result.lastError.code)){
-            if(result.lastError.code==='QUERY_CONTRACT')fail(result.lastError.code,result.lastError.message);
-            break; // preserve the query/account/unknown halt; do not poll subsequent segments
-          }
+          await resume(root,job.operationId,recoveryDeps,{maxPolls:options.maxPolls,pollIntervalMs:options.pollIntervalMs,redownloadMissing:true,strictDelivery:true});
+          if(currentAccountFailure)break;
         } catch(error) {
           const code=publicError(error).code;
           if(!localVideoIssue(code))throw error;

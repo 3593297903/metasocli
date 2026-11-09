@@ -90,5 +90,5 @@ it('manually attaches a confirmed provider task ID after total create-receipt lo
   const uncertain = { ...f.job, status: 'submit_unknown' as const }; delete uncertain.taskId; await persistence.job(f.root, uncertain);
   await expect(attachTask(f.root, f.job.operationId, 'task-1', false, { client: f.client })).rejects.toMatchObject({ code: 'TASK_LINK_REQUIRED' });
   expect((await attachTask(f.root, f.job.operationId, 'task-1', true, { client: f.client })).taskId).toBe('task-1');
-  expect((await readJob(f.root, f.job.operationId)).status).toBe('queued'); expect(f.client.creates).toBe(1);
+  expect((await readJob(f.root, f.job.operationId)).status).toBe('generated'); expect(f.client.creates).toBe(1);
 });

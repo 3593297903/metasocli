@@ -15,7 +15,7 @@ node E:\metasocli\dist\cli\main.js batch retry --root <story> --batch <batchId> 
 
 状态输出 `videoRetries`（批次为 `retries`）区分 `waiting_capacity`、`reserved`、`intent_saved`、`receipt_saved`、`submit_unknown`、`original_recovered`；Job 仍保留原兼容格式。waiting_capacity 表示授权已保存且尚未发送，不是已受理或生成失败。只有已证实尚未写发送意图的准备项能继续；存在发送意图而无回执时保持未知。授权文件之后、Job 之前中断可重建同一身份；存在提交证据却缺 Job 时拒绝重建。
 
-旧未知任务始终计入四个可能占用名额。确认只解除本项目该条未知对新增派发的全面阻断，不释放它的名额，也不解除本项目其他未确认未知或身份冲突。其他项目未知默认只占可能名额，不额外否决空位。比如三个已知活动任务加一个旧未知已经占满四个名额，新尝试须等待一个已知任务确认终态落盘；留下一个旧未知时，新/已知活动最多三个。没有可查询 ID 且可能名额全满时按容量预算有界等待，保存授权并返回可恢复暂停，不忙循环。
+旧未知的任务、请求和回执保留；其本地容量按 [R3默认策略](VIDEO_CAPACITY_POLICY.md) 自动释放/恢复。无ID创建异常结束或owner退出、实际GET失败、外部证据不可核实时释放。已知正常活跃任务仍占位，迟到活跃结果恢复计数。释放不授权相同输入再次POST，不改变一次性重试与原冻结范围。当前已知held达到或超过4时等待；POLL_LIMIT或本地停止不构成释放依据。
 
 批次重试优先补上该段，继续查询和下载已接受任务。其余段只沿用已保存的原批次范围授权；没有原授权时保存仅该新 operationId 的 `authorization.retryOnly` 范围，普通 batch resume 不扩大它。正常下载仍独立最多两个；下载失败只恢复原下载。每个新请求保持 `context_ir_enabled:true`、完整原文、时长向上取整、图序和原旁白绑定。
 
@@ -26,7 +26,7 @@ node E:\metasocli\dist\cli\main.js resume --root <story> --operation <newOperati
 
 单段 waiting_capacity 后，可重复同一正式重试命令或接入原 batch retry/resume。单段 resume/status/download 永不创建；batch resume 仅可继续其持久授权覆盖的未发送项。创建明确 failed/cancelled 沿用已有 `generate --retry-of ... --confirm`；已知 taskId 的查询超时不适用无 ID 重试，下载失败也不适用。
 
-若等待期间恢复了原 taskId，发送前复核会停止尚未发送的新尝试，返回原任务；新 Job 的未发送取消证据保留，原任务不被改成失败。新尝试已经发送后才找回旧 ID，则两条任务独立查询和保存不同 operationId 的输出。新视频成功不代表旧请求已终止；旧名额仅由真实终态证据释放。
+若等待期间恢复了原 taskId，发送前复核会停止尚未发送的新尝试，返回原任务；新 Job 的未发送取消证据保留，原任务不被改成失败。新尝试已经发送后才找回旧 ID，则两条任务独立查询和保存不同 operationId 的输出。新视频成功不代表旧请求已终止；旧名额按R3独立决定，新的活跃证据会恢复它。
 
 创建异常证据保存在原 receipts 目录，包含阶段、耗时、原错误 name/code、是否收到响应头、HTTP 状态和可用 request ID；不保存密钥、认证头、请求正文或签名链接。证据帮助定位下一次故障，不提供供应商幂等保证。
 
@@ -54,8 +54,8 @@ node E:\metasocli\dist\cli\main.js generate --root <story> --plan <planId> --seg
 
 ## 另一项目旧未知：默认隔离与旧确认兼容（2026-11-02）
 
-不同故事默认隔离，不再要求跨项目确认参数。一个外部未知仍占一个可能名额，当前项目最多使用余下三个；四个占满只让新增视频等待。当前项目批次只查询自己的原任务，外部错误不会暂停它。外部任务由所属故事恢复并持久化终态后释放名额，见 [项目隔离与冷切换](PROJECT_ISOLATION.md)。
+不同故事默认隔离，不要求跨项目确认参数。异常结束的外部未知按R3释放本地容量，原ID和错误保留；正常queued/running仍保留。当前批次不主动查询外部故事，外部历史错误不停止当前运行。迟到活跃证据恢复占位，见 [R3容量与冷切换](VIDEO_CAPACITY_POLICY.md)。
 
-旧 `batch run --confirm --accept-existing-unknown <operationId,...>` 仍解析并核对共享记录的 root/projectId/operationId/requestHash/inputHash；run.authorization.acceptedUnknown 继续验哈希并绑定原范围。跨项目记录保留审计意义，batch resume 不需要补充确认；同项目豁免仍验证真实授权和身份。参数不授权重试旧任务，也不能释放其占位或扩大范围。
+旧 `batch run --confirm --accept-existing-unknown <operationId,...>` 仍解析并核对共享记录的 root/projectId/operationId/requestHash/inputHash；run.authorization.acceptedUnknown 继续验哈希并绑定原范围。跨项目记录保留审计意义，batch resume 不需要补充确认；同项目豁免仍验证真实授权和身份。参数不授权重试旧任务或扩大范围；自动容量处理依据R3证据，不依据这个参数。
 
 容量等待默认30000ms、检查间隔250ms，支持 `--capacity-wait-ms`（0–300000）和 `--capacity-poll-ms`（10–60000）。预算耗尽保留原授权、pending 和准确等待轨迹，原 batch resume 继续；未发送不等于失败或未知。同项目运行权仍受保护，普通 status/resume/download 不创建任务。冷切换前结束旧版本进程；活跃/不明旧安装级锁不会被抢占，不支持新旧二进制热混跑。

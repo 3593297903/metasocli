@@ -27,7 +27,7 @@ async function setup() {
   const args = ['generate','--root',f.root,'--plan',plan.planId,'--segment','s1','--retry-of',old.operationId,'--confirm','--accept-unknown-result','--submit-only'];
   return { ...f, plan, old, client, calls, args };
 }
-it('defaults remain sticky; explicit CLI authorization makes one stable attempt, preserving the original unknown slot', async () => {
+it('defaults remain sticky; explicit CLI authorization makes one stable attempt, preserving the original unknown record while R3 releases its slot', async () => {
   const f = await setup();
   await expect(resume(f.root, f.old.operationId, { client: f.client })).rejects.toMatchObject({ code: 'SUBMIT_UNKNOWN' });
   await submit(f.root, f.plan.planId, 's1', true, { client: f.client });
@@ -38,7 +38,7 @@ it('defaults remain sticky; explicit CLI authorization makes one stable attempt,
   for (let i = 0; i < 3; i++) expect((await runCli(f.args, { client: f.client })).exitCode).toBe(0);
   expect(f.calls).toHaveLength(2); expect(f.calls[1]).toEqual(f.calls[0]);
   expect(await readJob(f.root, f.old.operationId)).toMatchObject({ status: 'submit_unknown', operationId: f.old.operationId });
-  expect(occupied(await reconcileRuntime(f.root))).toHaveLength(2);
+  expect(occupied(await reconcileRuntime(f.root))).toHaveLength(1);
 });
 it('preserves exact original text, decimal duration, image order and narration bytes through an actual request adapter', async () => {
   const f = await fixture('镜头 {{ref:b}} 与 {{ref:a}}。旁白：天亮了。\n'), start = f.text.indexOf('天亮了。');
@@ -55,7 +55,7 @@ it('preserves exact original text, decimal duration, image order and narration b
   expect(job.inputHash).toBe(old.inputHash); expect(job.requestHash).toBe(old.requestHash);
   expect(await readFile(join(f.root,'metasocli.yaml'))).toEqual(manifest);
 });
-it('task5 retry waits behind three accepted tasks plus its old unknown, then has priority and replenishes the saved scope', async () => {
+it('task5 releases its unknown slot for task6; an authorized retry waits behind four known tasks then precedes task7', async () => {
   const f=await batchFixture([7]), trace:unknown[]=[], posts:number[]=[];
   let continuing=false, attempts5=0, terminal2=false, new5=false;
   const client:VideoClient={
@@ -65,7 +65,7 @@ it('task5 retry waits behind three accepted tasks plus its old unknown, then has
       const ledger=await reconcileRuntime(f.root); expect(occupied(ledger).length).toBeLessThanOrEqual(4);
       trace.push({event:'POST',n,occupied:occupied(ledger).map(s=>({operationId:s.operationId,status:s.status}))});
       if(n===5){attempts5++;if(attempts5===1)throw new Error('unknown');expect(terminal2).toBe(true);new5=true;}
-      if(n>5)expect(new5).toBe(true);
+      if(n>5 && continuing)expect(new5).toBe(true);
       return {taskId:'task-'+n+'-'+posts.length,evidence};
     },
     async query(taskId){const n=Number(taskId.split('-')[1]);const done=n===1||continuing;
@@ -74,19 +74,20 @@ it('task5 retry waits behind three accepted tasks plus its old unknown, then has
   };
   const deps={client,fetcher:async()=>new Response(mp4(7))};
   await runBatch(f.root,f.batch.plan.batchId,true,deps,{maxPolls:1,pollIntervalMs:0});
-  expect(posts).toEqual([1,2,3,4,5]);
+  expect(posts).toEqual([1,2,3,4,5,6]);
   const old=(await listJobs(f.root)).find(j=>j.segmentId==='s5')!, item=f.batch.plan.items[4]!;
   const args=['generate','--root',f.root,'--plan',item.planId,'--segment','s5','--retry-of',old.operationId,'--confirm','--accept-unknown-result','--submit-only'];
   const waiting=await runCli(args,deps);
   expect(waiting).toMatchObject({exitCode:2,data:{jobs:[{status:'prepared'}],videoRetries:[{phase:'waiting_capacity'}]}});
   const candidate=(await listVideoRetries(f.root))[0]!.newOperationId;
-  expect(posts).toHaveLength(5); expect(occupied(await reconcileRuntime(f.root))).toHaveLength(4);
+  expect(posts).toHaveLength(6); expect(occupied(await reconcileRuntime(f.root))).toHaveLength(4);
   continuing=true;
   const result=await runCli(['batch','retry','--root',f.root,'--batch',f.batch.plan.batchId,'--operation',old.operationId,'--confirm','--accept-unknown-result','--poll-ms','0','--max-polls','10'],deps);
   expect(result).toMatchObject({exitCode:0,data:{summary:{reusable:7}}});
-  expect(posts).toEqual([1,2,3,4,5,5,6,7]);
+  expect(posts).toEqual([1,2,3,4,5,6,5,7]);
   expect((await batchStatus(f.root,f.batch.plan.batchId)).items[4]!.job!.operationId).toBe(candidate);
-  expect(occupied(await reconcileRuntime(f.root))).toMatchObject([{operationId:old.operationId,status:'submit_unknown'}]);
+  expect(occupied(await reconcileRuntime(f.root))).toHaveLength(0);
+  expect((await reconcileRuntime(f.root)).slots.find(s=>s.operationId===old.operationId)).toMatchObject({status:'submit_unknown',capacity:{state:'released'}});
   await runCli(args,deps);expect(posts).toHaveLength(8);
   const folder=resolve(process.env.METASO_TEST_EVIDENCE_DIR??'.work/unknown-video-retry-20261016');await mkdir(folder,{recursive:true});
   await writeFile(join(folder,'replenishment.json'),JSON.stringify({fakeOnly:true,posts,oldOperationId:old.operationId,newOperationId:candidate,trace,result},null,2));
@@ -120,14 +121,15 @@ it('recovering the original receipt before a waiting retry cancels only the prov
   expect(result).toMatchObject({exitCode:0,data:{jobs:[{operationId:f.old.operationId,taskId:'restored-original'}],videoRetries:[{phase:'original_recovered'}]}});
   expect((await readJob(f.root,auth.authorization.newOperationId)).lastError?.code).toBe('RETRY_SUPERSEDED');expect(f.calls).toHaveLength(1);
 });
-it('four acknowledged unknowns keep all slots and stop a batch iteration with an accurate no-queryable-tasks result',async()=>{
+it('four explicitly authorized retries each send once after R3 releases the four old unknown slots',async()=>{
   const f=await batchFixture([4]);let posts=0,queries=0;
   const client:VideoClient={async create(){posts++;throw new Error('lost');},async query(){queries++;throw new Error('no IDs');}};
-  for(const item of f.batch.plan.items){const old=await submit(f.root,item.planId,item.segmentId,true,{client});await authorizeVideoRetry(f.root,item.planId,item.segmentId,old.operationId,true,true);}
+  for(const item of f.batch.plan.items){const old=await submit(f.root,item.planId,item.segmentId,true,{client});await authorizeBatchRetry(f.root,f.batch.plan.batchId,old.operationId,true,true);}
   const result=await runBatch(f.root,f.batch.plan.batchId,true,{client},{maxPolls:1,pollIntervalMs:0});
-  expect(result.run!.trace.some(t=>t.event==='waiting-capacity-no-queryable-tasks')).toBe(true);
-  expect(result.retries.every(r=>r.phase==='waiting_capacity')).toBe(true);expect(posts).toBe(4);expect(queries).toBe(0);
-  expect(occupied(await reconcileRuntime(f.root))).toHaveLength(4);
+  expect(result.run!.status).toBe('needs_attention');
+  expect(posts).toBe(8);expect(queries).toBe(0);
+  await runBatch(f.root,f.batch.plan.batchId,false,{client},{maxPolls:1,pollIntervalMs:0});expect(posts).toBe(8);
+  expect((await listJobs(f.root))).toHaveLength(8);expect(occupied(await reconcileRuntime(f.root))).toHaveLength(0);
 },90000);
 it('batch retry without prior scope authorization only sends the specifically authorized segment',async()=>{
   const f=await batchFixture([3]);let posts=0;
@@ -214,13 +216,14 @@ it('cannot change the plan of a waiting retry or send a prepared record containi
   await persistence.job(f.root,{...a.job,submittedAt:new Date().toISOString()});
   expect((await runCli(f.args,{client:f.client})).data).toMatchObject({error:{code:'RETRY_CONFLICT'}});expect(f.calls).toHaveLength(1);
 });
-it('keeps unacknowledged same-project unknowns blocking despite another exact acknowledgement',async()=>{
+it('released other-input unknowns do not block a separately authorized retry',async()=>{
   const f=await batchFixture([3]),item=f.batch.plan.items[0]!;
   const client:VideoClient={async create(){throw new Error('lost');},async query(){throw new Error('no ID');}};
   const old=await submit(f.root,item.planId,item.segmentId,true,{client});await authorizeVideoRetry(f.root,item.planId,item.segmentId,old.operationId,true,true);
   const otherItem=f.batch.plan.items[1]!;await submit(f.root,otherItem.planId,otherItem.segmentId,true,{client});
-  await expect(submit(f.root,item.planId,item.segmentId,true,{client},old.operationId,true)).rejects.toMatchObject({code:'SUBMIT_UNKNOWN'});
-  expect(await blockingSlots(f.root,await reconcileRuntime(f.root))).toHaveLength(1);
+  const child=await submit(f.root,item.planId,item.segmentId,true,{client},old.operationId,true);expect(child.retryOf).toBe(old.operationId);
+  expect(await blockingSlots(f.root,await reconcileRuntime(f.root))).toHaveLength(0);
+  expect(await listJobs(f.root)).toHaveLength(3);
 });
 it('all three canonical skills explain local identity, one-attempt authorization and attachment boundaries',async()=>{
   for(const name of ['metasocli','metasocli-video-prompts','metasocli-video-prompts-旁白']){

@@ -22,18 +22,18 @@ const running=(taskId:string)=>({taskId,status:'running' as const,rawStatus:'run
 const generated=(taskId:string)=>({taskId,status:'generated' as const,rawStatus:'succeeded',duration:7,url:'https://example.com/offline.mp4',evidence});
 const start=async(f:Awaited<ReturnType<typeof batchFixture>>,client:VideoClient,segment='s1')=>submit(f.root,f.batch.plan.items[0]!.planId,segment,true,{client});
 
-it('V1: foreign no-ID unknown uses one slot, B can start three; no automatic resend and no foreign GET',async()=>{
+it('V1 R3: foreign ended unknown releases its slot, B starts four; no resend or foreign GET',async()=>{
   const a=await batchFixture([1]),b=await batchFixture([4]);let postsA=0,postsB=0,peak=0;
   const old=await start(a,{async create(){postsA++;throw Error('unknown');},async query(){throw Error('must not query unknown');}});
   const oldBytes=await readFile(join(a.root,`.metasocli/jobs/${old.operationId}.json`));
   const client:VideoClient={async create(r){expect(r.model).toBe('MiniMax-H3');expect(r.context_ir_enabled).toBe(true);peak=Math.max(peak,occupied(await reconcileRuntime(b.root)).length);return {taskId:'B-'+(++postsB),evidence};},async query(id){expect(id.startsWith('B-')).toBe(true);return running(id);}};
-  const first=await runBatch(b.root,b.batch.plan.batchId,true,{client},options);expect(first.summary).toMatchObject({pending:1,active:3});expect(first.run?.status).toBe('paused');expect(postsB).toBe(3);expect(peak).toBe(4);
-  await runBatch(b.root,b.batch.plan.batchId,false,{client},options);expect(postsB).toBe(3);expect(postsA).toBe(1);expect(await readFile(join(a.root,`.metasocli/jobs/${old.operationId}.json`))).toEqual(oldBytes);
-  const status=await runCli(['batch','status','--root',b.root,'--batch',b.batch.plan.batchId],{client});expect(status.data).toMatchObject({capacity:{sharedLimit:4,sharedOccupied:4,currentProjectOccupied:3,otherProjectsOccupied:1,available:0,liveCheckPerformed:false}});expect(postsB).toBe(3);
+  const first=await runBatch(b.root,b.batch.plan.batchId,true,{client},options);expect(first.summary).toMatchObject({pending:0,active:4});expect(first.run?.status).toBe('paused');expect(postsB).toBe(4);expect(peak).toBe(4);
+  await runBatch(b.root,b.batch.plan.batchId,false,{client},options);expect(postsB).toBe(4);expect(postsA).toBe(1);expect(await readFile(join(a.root,`.metasocli/jobs/${old.operationId}.json`))).toEqual(oldBytes);
+  const status=await runCli(['batch','status','--root',b.root,'--batch',b.batch.plan.batchId],{client});expect(status.data).toMatchObject({capacity:{sharedLimit:4,sharedOccupied:4,currentProjectOccupied:4,otherProjectsOccupied:0,available:0,liveCheckPerformed:false}});expect(postsB).toBe(4);
   records.push({case:'V1',oldOperation:old.operationId,projectA:old.projectId,projectB:b.batch.plan.projectId,postsA,postsB,peak,oldHash:sha256Hex(oldBytes),newIds:(await listJobs(b.root)).map(j=>j.operationId)});
 });
 
-it.each(['query_unknown','corrupt-job','missing-root'] as const)('V2/V7/V9: foreign %s remains a snapshot; B completes without foreign GET or error',async mode=>{
+it.each(['query_unknown','corrupt-job','missing-root'] as const)('V2/V7/V9 R3: foreign %s releases locally; B completes without foreign GET or source writes',async mode=>{
   const a=await batchFixture([1]),b=await batchFixture([1]);let posts=0;
   const old=await start(a,{async create(){return {taskId:'A-known',evidence};},async query(){throw Error('unused');}});
   if(mode==='query_unknown')await resume(a.root,old.operationId,{client:{async create(){throw Error('no POST');},async query(taskId){return {taskId,status:'unknown',rawStatus:'new-status',evidence};}}},{maxPolls:1,download:false});
@@ -42,7 +42,7 @@ it.each(['query_unknown','corrupt-job','missing-root'] as const)('V2/V7/V9: fore
   if(mode==='missing-root')await rename(a.root,join(dirname(a.root),'archived'));
   const queried:string[]=[];const client:VideoClient={async create(){posts++;return {taskId:'B-known',evidence};},async query(taskId){queried.push(taskId);expect(taskId).toBe('B-known');return generated(taskId);}};
   expect((await runBatch(b.root,b.batch.plan.batchId,true,{client,fetcher},options)).run?.status).toBe('complete');
-  expect((await reconcileRuntime(b.root)).slots.find(s=>s.operationId===old.operationId)).toEqual(before);expect(posts).toBe(1);expect(queried.length).toBeGreaterThan(0);expect(new Set(queried)).toEqual(new Set(['B-known']));
+  const after=(await reconcileRuntime(b.root)).slots.find(s=>s.operationId===old.operationId)!;expect(after).toMatchObject({operationId:before!.operationId,taskId:before!.taskId,requestHash:before!.requestHash,capacity:{state:'released'}});expect(posts).toBe(1);expect(queried.length).toBeGreaterThan(0);expect(new Set(queried)).toEqual(new Set(['B-known']));
   records.push({case:'V2/V7/V9',mode,posts,queried,foreignSnapshot:before});
 });
 
@@ -58,21 +58,21 @@ it('V3/V5/V10: A holds two tasks and its scheduler; B concurrency=1 starts befor
   records.push({case:'V3/V5/V10',aPosts,bPosts,peak,bConcurrency:1,bStartedBeforeACompleted:true});
 });
 
-it('V6/V8: four foreign unknowns wait boundedly without blocking images; a known terminal releases only after persistence and B resumes',async()=>{
-  const owners=[];for(let i=0;i<4;i++){const f=await batchFixture([1]);const j=await start(f,{async create(){throw Error('unknown');},async query(){throw Error('unused');}});owners.push({f,j});}
+it('V6/V8 R3: four known active foreign tasks wait boundedly without blocking images; a terminal releases and B resumes',async()=>{
+  const owners=[];for(let i=0;i<4;i++){const f=await batchFixture([1]);const j=await start(f,{async create(){return {taskId:'active-A-'+i,evidence};},async query(){throw Error('unused');}});owners.push({f,j});}
   const b=await batchFixture([1]);let bPosts=0;
   const client:VideoClient={async create(){bPosts++;return {taskId:'B-after-release',evidence};},async query(id){return generated(id);}};
   const blocked=await runBatch(b.root,b.batch.plan.batchId,true,{client}, {...options,capacityWaitMs:40,capacityPollMs:10});expect(bPosts).toBe(0);expect(blocked.summary.pending).toBe(1);expect(blocked.run?.trace.some(t=>t.event==='capacity-wait-budget-ended')).toBe(true);
   const img=await imageFixture(),ip=(await createImagePlan(img.root,{episodes:['ep-1'],profile})).plan;let images=0;
   await runImages(img.root,ip.planId,true,{client:{async create(){images++;return imageResponse();}}});expect(images).toBe(1);
-  const {attachTask}=await import('../src/jobs/resume.js');const first=owners[0]!;await attachTask(first.f.root,first.j.operationId,'recovered-A',true,{client});
+  const first=owners[0]!;
   const waiting=barrier(),release=barrier();let sawWait=false;
   const work=runBatch(b.root,b.batch.plan.batchId,false,{client,fetcher,sleep:async()=>{if(!sawWait){sawWait=true;waiting.resolve();await release.promise;}}},{...options,capacityWaitMs:5000,capacityPollMs:10});
   try{await waiting.promise;expect(bPosts).toBe(0);const terminal=await resume(first.f.root,first.j.operationId,{client},{maxPolls:1,download:false});expect(terminal.status).toBe('generated');expect(occupied(await reconcileRuntime(first.f.root))).toHaveLength(3);release.resolve();expect((await work).run?.status).toBe('complete');}
   finally{release.resolve();await work;}
   expect(bPosts).toBe(1);expect(occupied(await reconcileRuntime(b.root))).toHaveLength(3);
   const oldBatchHash=blocked.run?.authorization.batchHash;expect((await runCli(['batch','status','--root',b.root,'--batch',b.batch.plan.batchId],{client})).exitCode).toBe(0);expect(bPosts).toBe(1);
-  records.push({case:'V6/V8',oldOperations:owners.map(x=>x.j.operationId),blockedPosts:0,bPosts,images,authorizationHash:oldBatchHash,remainingUnknowns:3});
+  records.push({case:'V6/V8',oldOperations:owners.map(x=>x.j.operationId),blockedPosts:0,bPosts,images,authorizationHash:oldBatchHash,remainingKnownActive:3});
 },30000);
 
 it('V10: different-story normal submit ignores A scheduler; same-story casing cannot bypass it',async()=>{

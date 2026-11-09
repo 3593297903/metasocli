@@ -117,7 +117,7 @@ it.each([false, true])('a completed project can be archived without blocking a n
 }, 45000);
 
 it.each(['reserved', 'prepared', 'submitting', 'queued', 'running', 'submit_unknown', 'query_unknown'] as const)(
-  'a missing %s project retains its snapshot and allows another story to use free capacity', async status => {
+  'a missing %s project retains its identity/result and releases R3 capacity for another story', async status => {
     const a = await batchFixture([1]), b = await batchFixture([1]); let posts = 0;
     const unknown = status === 'submit_unknown', beforePost = ['reserved', 'prepared', 'submitting'].includes(status);
     const client: VideoClient = {
@@ -140,8 +140,11 @@ it.each(['reserved', 'prepared', 'submitting', 'queued', 'running', 'submit_unkn
     const archived = await moveFixture(a.root);
     const accepted = await runCli(generateArgs(b.root, b.batch.plan.items[0]!.planId), { client });
     expect(accepted).toMatchObject({ exitCode: 0 }); expect(posts).toBe(postsBeforeMove+1);
-    expect((await readLedger()).slots.find(s=>s.operationId===before.slots[0]!.operationId)).toEqual(before.slots[0]);
-    expect(occupied(await readLedger())).toHaveLength(2);
+    const retained=(await readLedger()).slots.find(s=>s.operationId===before.slots[0]!.operationId)!;
+    const {capacity:oldCapacity,...oldIdentity}=before.slots[0]!,{capacity,...retainedIdentity}=retained;
+    expect(retainedIdentity).toEqual(oldIdentity);expect(capacity!.state).toBe('released');
+    expect(capacity!.reason).toBe(oldCapacity!.state==='released'?oldCapacity!.reason:'source_unavailable');
+    expect(occupied(await readLedger())).toHaveLength(1);
     // Moving the active directory is not a supported way to reacquire its identity/capacity.
     expect((await runCli(['batch', 'register', '--root', archived], { client })).exitCode).toBe(1);
     await rename(archived, a.root);

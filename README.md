@@ -1,6 +1,6 @@
 # metasocli
 
-当前源码快照为 `metasocli-0.1.0-snapshot-20261107-video-run`。恢复时使用该标签或其完整 Git 提交号。[一次视频流程与复用标记版本记录](docs/VERSION_SNAPSHOT_20261107_VIDEO_RUN.md)；[上一版换提示词记录](docs/VERSION_SNAPSHOT_20261107_PROMPT_REPLACEMENT.md)；[同 ID 换图记录](docs/VERSION_SNAPSHOT_20261107_IMAGE_REPLACEMENT.md)。
+当前源码快照为 `metasocli-0.1.0-snapshot-20261109-capacity-r3`。恢复时使用该标签或其完整 Git 提交号。[R3 视频容量与恢复修复版本记录](docs/VERSION_SNAPSHOT_20261109_CAPACITY_R3.md)；[上一版一次视频流程记录](docs/VERSION_SNAPSHOT_20261107_VIDEO_RUN.md)；[一次换提示词记录](docs/VERSION_SNAPSHOT_20261107_PROMPT_REPLACEMENT.md)；[同 ID 换图记录](docs/VERSION_SNAPSHOT_20261107_IMAGE_REPLACEMENT.md)。
 
 独立的 Node.js / TypeScript CLI，将完整剧本或成品视频提示词整理为 Metaso `MiniMax-H3` 请求计划，并管理提交、查询、恢复及视频下载。当前版本 **0.1.0**。2026-09-21 起默认视频请求明确启用 `context_ir_enabled:true`；本次切换只做离线验证，没有发起付费生成。
 
@@ -162,17 +162,17 @@ node $cli batch resume --root $story --batch $batchId
 
 `batch plan --all-episodes` 按故事清单顺序选原始集。若存在独立 IR 操作历史或可识别的派生来源，返回 `BATCH_ORIGINALS_AMBIGUOUS`，要求改用显式范围；不按 `-ir` 文件名猜测、拆写故事或自动叠加增强。
 
-所有项目在同一 runtime 合计最多4个生成名额；每个项目 concurrency=1–4 是附加上限。每个批次保存不可变计划哈希、请求及素材指纹、范围和运行授权。默认最多4个生成名额，可设置1—4。4个创建请求可同时在途；task_id 仅代表已受理，queued/running/受控 submitting/未知都继续占位。服务端终态验证并持久化后补下一个待提交段。下载另有最多2个并发，慢下载和下载失败不堵塞生成补位；输出仍为 `outputs/<episodeId>/<segmentId>-<operationId>.mp4`。
+所有项目在同一 runtime 合计最多4个当前已知有效占位；每个项目 concurrency=1–4 是附加上限。每个批次保存不可变计划哈希、请求及素材指纹、范围和运行授权。默认最多4个生成名额，可设置1—4。4个创建请求可同时在途；task_id 仅代表已受理，正常queued/running和活跃owner的submitting继续占位。按[R3默认策略](docs/VIDEO_CAPACITY_POLICY.md)自动释放/恢复容量，落盘后补下一段；异常未知释放后远端真实任务数可能超过4，找回活跃证据即恢复计数并暂停新增。下载另有最多2个并发，慢下载和下载失败不堵塞生成补位；输出仍为 `outputs/<episodeId>/<segmentId>-<operationId>.mp4`。
 
-`batch run --confirm` 将授权绑定该批次哈希；`batch resume` 只能使用已保存授权，**允许继续范围内尚未提交的段**。旧 `resume --operation`、status、download 始终不创建任务。批次会接回已有 task_id，重建缺失的批次任务链接，复用通过文件/回执检查的成片。本故事未显式确认的创建未知停止本故事新增并保留占位，已知任务继续查询和下载；失败段不自动重做。只有明确未受理且无任何任务 ID 的429可自动重试，每段最多2次、批次累计等待最多60000ms，预算/每次尝试在新 POST 前保存；遵守更长 Retry-After 时超出预算则暂停。超时、5xx、矛盾回包绝不自动重发，401/402/403停止新增。POST 响应上限120秒、GET30秒，延长超时不代表幂等保证。
+`batch run --confirm` 将授权绑定该批次哈希；`batch resume` 只能使用已保存授权，**允许继续范围内尚未提交的段**。旧 `resume --operation`、status、download 始终不创建任务。批次会接回已有 task_id，重建缺失的批次任务链接，复用通过文件/回执检查的成片。本故事已释放的旧未知不阻止其他授权输入，同一输入仍禁止自动重发，已知任务继续查询和下载；失败段不自动重做。只有明确未受理且无任何任务 ID 的429可自动重试，每段最多2次、批次累计等待最多60000ms，预算/每次尝试在新 POST 前保存；遵守更长 Retry-After 时超出预算则暂停。超时、5xx、矛盾回包绝不自动重发，401/402/403停止新增。POST 响应上限120秒、GET30秒，延长超时不代表幂等保证。
 
 `batch run/resume` 的 `--max-polls 60 --poll-ms 5000` 仅查询当前故事；`--scheduler-wait-ms 30000`（0–300000）等待同故事运行权，不串行化不同故事。共享容量不足时新增 `--capacity-wait-ms 30000 --capacity-poll-ms 250`（范围0–300000和10–60000），有界等待后保存 pending/paused，原 batch resume 可继续。普通新建在同故事批次期间返回 SCHEDULER_BUSY；空位不足返回 CAPACITY_FULL。详见 [项目隔离与冷切换](docs/PROJECT_ISOLATION.md)。
 
 共享目录默认 `%USERPROFILE%\.metasocli-runtime`，可用 `METASO_RUNTIME_DIR` 或 `--runtime-dir <path>` 注入**同一个**安装运行目录；测试用临时目录。历史已知项目可先 `batch register --root <story>`，只将已有任务登记到共享名额，不联网创建。登记与同步只扫描当前项目，其他项目保留为共享快照，不打开其目录。batch status 的 capacity 明确区分当前故事和其他故事的占位。Windows 同一目录的不同大小写统一为一个身份，兼容旧 ledger 的写法；不同目录不能共用项目或操作身份。它不能发现未登记的其他项目，也不能控制网页、旧程序或其他电脑的调用；4是本地上限，真实账户额度和并发仍待授权验收。
 
-已完成项目归档：先确认生成终态并运行 `batch register --root <story>`，再移动完整项目目录。其他项目只使用共享终态快照，不依赖旧路径，旧 retiredAt 字段仍兼容。活动/未知项目缺目录仍保留可能名额；其他项目可以使用剩余容量。四个名额全被占用时仅新增视频等待，图片/离线准备/原结果恢复不停止。原项目须恢复原路径再核验任务；另一实际目录不能冒用 UUID。不得删除 ledger、锁、未知记录或伪造终态释放名额。
+已完成项目归档：先确认生成终态并运行 `batch register --root <story>`，再移动完整项目目录。其他项目只使用共享终态快照，不依赖旧路径，旧 retiredAt 字段仍兼容。活动/未知项目缺目录而无法核实时，按R3在可信共享账本中释放对应容量，保留原路径/ID和错误；其他项目可使用空位。四个名额全被占用时仅新增视频等待，图片/离线准备/原结果恢复不停止。原项目须恢复原路径再核验任务；另一实际目录不能冒用 UUID。不得删除 ledger、锁、未知记录或伪造终态释放名额。
 
-批次位于 `.metasocli/batches/<batchId>/{plan,run}.json`；共享 `video-ledger.json` 只做预留与索引，单段 Job/receipt 是恢复依据。提交和查询不持有长项目锁，下载仅持本任务锁；固定共享锁→短项目写锁顺序，网络、轮询等待和下载流在状态锁外执行。异常退出不清空未知名额。记录与轨迹见 [实施报告](docs/VIDEO_BATCH_CONCURRENCY_IMPLEMENTATION_REPORT.md)。
+批次位于 `.metasocli/batches/<batchId>/{plan,run}.json`；共享 `video-ledger.json` 只做预留与索引，单段 Job/receipt 是恢复依据。提交和查询不持有长项目锁，下载仅持本任务锁；固定共享锁→短项目写锁顺序，网络、轮询等待和下载流在状态锁外执行。异常退出不清空账本、任务或错误；下次正式执行按R3自动处理容量。记录与轨迹见 [实施报告](docs/VIDEO_BATCH_CONCURRENCY_IMPLEMENTATION_REPORT.md)。
 
 ```text
 status      --root <story>                           本地只读，不需要 Key
@@ -184,11 +184,11 @@ download    --root <story> --operation <id> --redownload-missing
 
 提交前先落盘 prepared/submitting 请求记录及共享预留，取得 taskId 后先保存独立回执。同一请求重复执行复用已有操作；单段命令不自动重试创建，批次只有上述明确拒绝的429例外。本地哈希不代表服务端幂等。
 
-新流程的任务与回执继续位于 `.metasocli/jobs/` 和 `.metasocli/receipts/`。历史独立 IR 数据位于 `.metasocli/context-ir/`，本地 status 仍列 `contextIrOperations`，可以按原 ID 恢复。未显式确认的未知提交会在项目锁内阻止新的收费创建；视频的一次性显式授权只局部解除该条未知的派发阻断，仍保留占位。
+新流程的任务与回执继续位于 `.metasocli/jobs/` 和 `.metasocli/receipts/`。历史独立 IR 数据位于 `.metasocli/context-ir/`，本地 status 仍列 `contextIrOperations`，可以按原 ID 恢复。视频未知的本地容量与业务结果分开；自动释放不构成重试授权，同输入防重及一次性显式授权保留。图片及独立IR仍沿用原规则。
 
 旧独立 IR 文本命令和底层兼容模块仍保留，历史结构见 [原独立流程记录](docs/CONTEXT_IR_WORKFLOW.md)。当前 Skill 不走该链，CLI 也不接受 false 的派生计划新建视频；不要绕过 CLI 或把旧增强文本自动叠加一次 IR。
 
-- `submit_unknown`：可能已被接受，默认不自动重发。找回原结果时，核实原 taskId 后 `attach-task --root <story> --operation <id> --task <task-id> --confirm-task-link` 再 resume。用户明确授权该段一次新生成时可用本地 operationId 执行正式重试，无需缺失的远端 ID；旧未知与占位保留，可能重复计费，详见 [一次性显式重试](docs/VIDEO_UNKNOWN_RETRY.md)。CLI 无法替供应商证明原任务归属。
+- `submit_unknown`：可能已被接受，默认不自动重发。找回原结果时，核实原 taskId 后 `attach-task --root <story> --operation <id> --task <task-id> --confirm-task-link` 再 resume。用户明确授权该段一次新生成时可用本地 operationId 执行正式重试，无需缺失的远端 ID；旧未知记录保留，容量按R3独立处理，可能重复计费，详见 [一次性显式重试](docs/VIDEO_UNKNOWN_RETRY.md)。CLI 无法替供应商证明原任务归属。
 - `query_unknown`：保留已脱敏响应证据和原 taskId，随后再查。未知状态、缺失结果地址或错误响应不会当作 queued/success。
 - `generated` 加下载错误：只恢复下载。MP4 经流式大小限制、容器/时长/尺寸及 SHA-256 检查后原子保存；落盘回执允许恢复“已重命名但最终状态未写入”。校验不等于完整解码或视觉质量保证。
 - `failed/cancelled`：默认不再次提交。主动重生成必须指定单段和 `--retry-of <latest-operation-id>`，形成独立尝试；当前 true 请求继续使用同一 true 计划。旧 false 请求切换模式要创建新计划，并明确这是新请求。未知视频的新尝试另需 `--accept-unknown-result --confirm`，仅限无 taskId 的最新操作。
@@ -229,7 +229,7 @@ node E:\metasocli\dist\cli\main.js batch retry --root <story> --batch <batchId> 
 node E:\metasocli\dist\cli\main.js generate --root <story> --plan <planId> --segment <segmentId> --retry-of <oldLocalOperationId> --confirm --accept-unknown-result
 ```
 
-旧请求可能受理并重复计费，旧未知继续占位；重复上述同一命令只沿用一个稳定新尝试。waiting_capacity 表示待空位，不是失败或已生成。完整状态、四并发衔接与范围约束见 [视频显式重试](docs/VIDEO_UNKNOWN_RETRY.md)，另一设备版本要求见 [修复构建部署](docs/NEW_DEVICE_RETRY_BUILD.md)。
+旧请求可能受理并重复计费；旧未知记录保留，本地容量按R3自动处理；重复上述同一命令只沿用一个稳定新尝试。waiting_capacity 表示待空位，不是失败或已生成。完整状态、四并发衔接与范围约束见 [视频显式重试](docs/VIDEO_UNKNOWN_RETRY.md)，另一设备版本要求见 [修复构建部署](docs/NEW_DEVICE_RETRY_BUILD.md)。
 # 图片固定准备/结果交接增量（2026-11-02）
 
 本地开发入口新增 `images prepare --root <story> --batch <image-batch.json>` 与 `images collect --root <story> --preparation <id>`，原 `images run/status/resume/retry` 可加 `--summary`。完整命令、清单与恢复说明见 [图片 API 用法](docs/IMAGE_API_USAGE.md#固定准备与结果收集2026-11-02)。prepare/collect 只做本地校验和证据交接，不发起网络或收费调用；运行仍沿用原授权。旧故事与旧正式计划无需迁移，原命令继续可用。
@@ -249,3 +249,15 @@ node dist/cli/main.js prompts replace --root <story> --episode <原集ID> --segm
 已就绪的选段使用一次正式调用：`node dist/cli/main.js video run --root <story> --selection <selection.json> --confirm`。整集可换为 `--episodes <有序集ID>`，恢复使用 `--batch <准确batchId>`；三个范围互斥。不加 confirm 仅本地准备/状态/交付。它核对冻结范围后调用原 video execute，保留四生成/两下载、原任务恢复和未知不重发规则；旧 video execute 的 expect-scope 要求不变。完整命令、共享 Skill 样例与授权范围见 [视频执行](docs/VIDEO_EXECUTE.md#固定视频入口)。
 
 回执含批次/段/原任务身份、正式输出文件及 SHA-256、阶段计时。复用成片标记 reused；partial 或 delivery_incomplete 不冒充完成。先换图/换稿时分别核验原固定入口回执再运行视频；纯替换到此结束。本功能离线测试不等于供应商真实生成验收。
+
+## R3 视频容量与离线验收
+
+三个入口继续使用一次 `video run`。无需额外清理命令或重复确认；正式执行自动检查实际占位、按项处理失败、优先补齐当前批次，并按原任务号收取迟到结果。只读和无确认准备不释放、不迁移、不联网。规则、v2冷迁移及回退边界见 [视频容量默认策略](docs/VIDEO_CAPACITY_POLICY.md)。
+
+```text
+npm run test:video-capacity
+npm run test:video-capacity:process
+node scripts/video-capacity-benchmark.mjs <保留的基线源码及dist目录> 3
+```
+
+这些命令使用隔离夹具和假客户端；不证明真实供应商容量、网络或收费生成已验收。

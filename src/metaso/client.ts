@@ -117,7 +117,9 @@ export class MetasoClient implements VideoClient, ContextIrClient {
     const status = states[t.status.toLowerCase()] ?? 'unknown';
     let url: string | undefined;
     if (status === 'generated') {
-      try { url = publicHttps(t.content?.url ?? ''); } catch { throw new ProviderError('QUERY_CONTRACT', 'Completed task lacks a valid output URL.', { evidence }); }
+      // A verified provider terminal state releases generation capacity even when delivery is invalid.
+      // resume validates the missing/invalid URL as RESULT_METADATA and never downloads it.
+      try { url = publicHttps(t.content?.url ?? ''); } catch { url = undefined; }
     }
     return { taskId, status, rawStatus: /^[a-z0-9_-]+$/iu.test(t.status) ? String(redact(t.status, [this.#key])) : 'unrecognized', ...(url ? { url } : {}),
       ...(t.duration ? { duration: t.duration } : {}), ...(t.resolution ? { resolution: t.resolution } : {}), ...(t.ratio ? { ratio: t.ratio } : {}), evidence };

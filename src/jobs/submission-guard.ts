@@ -17,7 +17,7 @@ export async function operationKind(root: string, operationId: string): Promise<
   return ir ? 'ir' : 'video';
 }
 /** Caller owns the non-reentrant project lock. No lock acquisition or remote calls here. */
-export async function checkSubmissionConflicts(root: string, episodeId: string, segmentId: string, ignoreOperationId?: string, acknowledgedVideos: ReadonlySet<string> = new Set()) {
+export async function checkSubmissionConflicts(root: string, episodeId: string, segmentId: string, ignoreOperationId?: string, acknowledgedVideos: ReadonlySet<string> = new Set(), released:ReadonlyMap<string,string>=new Map(),inputHash?:string) {
   await assertNoImageStage(root);
   const [videos, irs] = await Promise.all([listJobs(root), listIrOperations(root)]);
   const ids = new Set(videos.map(j => j.operationId));
@@ -25,7 +25,9 @@ export async function checkSubmissionConflicts(root: string, episodeId: string, 
   const all = [...videos, ...irs];
   const taskIds = all.flatMap(j => j.taskId ? [j.taskId] : []);
   if (new Set(taskIds).size !== taskIds.length) fail('TASK_LINK_CONFLICT', 'A remote task ID is linked to multiple operations.');
-  const conflicts = [...videos.filter(j => !(j.status === 'submit_unknown' && !j.taskId && acknowledgedVideos.has(j.operationId))), ...irs];
+  const conflicts = [...videos.filter(j => !(j.status === 'submit_unknown' && !j.taskId && acknowledgedVideos.has(j.operationId)))
+    .filter(j=>!(released.get(j.operationId)===j.inputHash && inputHash!==undefined &&
+      (j.episodeId!==episodeId || j.segmentId!==segmentId || j.inputHash!==inputHash))), ...irs];
   if (conflicts.some(j => j.operationId !== ignoreOperationId && j.status === 'submit_unknown')
     || irs.some(j => j.operationId !== ignoreOperationId && j.status === 'submitting')) fail('SUBMIT_UNKNOWN', 'An IR or video creation is unresolved; recover its task ID before any new paid creation.');
   if (conflicts.some(j => j.operationId !== ignoreOperationId && j.episodeId === episodeId && j.segmentId === segmentId

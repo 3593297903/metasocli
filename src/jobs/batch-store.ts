@@ -73,6 +73,7 @@ export async function writeBatchRunLocked(root: string, run: VideoBatchRun) {
   if (await exists(file)) {
     const previous = parse(BatchRun, await readJson(file)), {hash,...base}=previous;
     if (hash !== canonicalSha256(base) || hash !== run.hash || previous.batchHash !== run.batchHash) fail('BATCH_RUN_CONFLICT','Batch run changed during update: '+run.batchId);
+    if(canonicalSha256(previous)===canonicalSha256(run))return;
   } else if (run.hash !== '0'.repeat(64)) fail('BATCH_RUN_CONFLICT','Batch run disappeared: '+run.batchId);
   const { hash: _, ...previous } = run;
   const base={...previous,updatedAt:new Date().toISOString()};

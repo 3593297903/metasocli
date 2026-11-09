@@ -29,13 +29,13 @@ description: 将成品视频提示词按原文导入 metasocli，准备素材和
 
 后续使用 [剧本入口的公开命令与恢复规则](../metasocli/SKILL.md)，并完整读取 [当前 Context IR 流程](../../docs/INLINE_CONTEXT_IR_WORKFLOW.md)。新草稿段参数 `contextIr` 写 true，素材登记后由 `video run` 的本地准备冻结所选集的 h3-inline-ir 父计划及所选段批次。确认每段 `contextIr:true`，默认停在视频提交前；说明视频请求包含 IR 费用。
 
-按 [剧本入口的批次规则](../metasocli/SKILL.md#已授权范围的四并发批次) 将授权范围内全部视频段组织成一个批次。离线执行 `video run --root <story> --episodes <有序集ID> --concurrency 4`；部分段使用 `--selection <selection.json>`，范围参数互斥，不重新拆写提示词。展示返回的 `batchId`、哈希、总数/复用/活动/待提交数，未授权生成则暂停。用户明确授权本次范围及此模式后，直接执行 `video run --root <story> --batch <batchId> --confirm`，不逐段或每4段再次确认。最多4段生成，终态持久化后持续补位，task_id 不是完成；下载另有2个名额，不等待整组。
+按 [剧本入口的批次规则](../metasocli/SKILL.md#已授权范围的四并发批次) 将授权范围内全部视频段组织成一个批次。离线执行 `video run --root <story> --episodes <有序集ID> --concurrency 4`；部分段使用 `--selection <selection.json>`，范围参数互斥，不重新拆写提示词。展示返回的 `batchId`、哈希、总数/复用/活动/待提交数，未授权生成则暂停。用户明确授权本次范围及此模式后，直接执行 `video run --root <story> --batch <batchId> --confirm`，不逐段或每4段再次确认。当前已知有效占位最多4段，R3容量决定持久化后持续补位，task_id 不是完成；下载另有2个名额，不等待整组。
 
 每段实际视频请求必须携带布尔值 `context_ir_enabled:true`；不先单独执行 context-ir，不派生独立 IR 视频计划，不提前改写或翻译原文。提交前核对完整台词、说话人、顺序、镜头动作、图片编号和限制。IR 在服务端视频请求内执行，没有可先行核对的独立增强文本，不能声称已有该审阅结果。普通入口不自动添加统一旁白音频；已有明确音频绑定则保持原有归属。
 
 历史 false 计划需针对原始集重新 plan，不能手改旧计划或自动将 IR 副本集再增强。已有任务按原 taskId 查询、恢复和下载，不能因响应没返回 context_ir_enabled 而重发；程序不伪造返回字段。当前范围已获授权时自动继续，不逐段再问。
 
-本入口已授权批次恢复使用 `video run --root <story> --batch <batchId> --confirm`，它可继续已保存授权覆盖的未提交段；`batch status` 只读本地，旧 `resume --operation` 不创建新任务。复用已验证成片，下载失败只恢复下载。未显式确认的未知创建保留名额并停止新增，禁止用新批次/运行目录绕过；明确失败不自动重做，安全429重试受保存预算限制。已有独立 IR 副本不能自动进入 `--all-episodes`，范围不明时显式选择原始集和段。
+本入口已授权批次恢复使用 `video run --root <story> --batch <batchId> --confirm`，它可继续已保存授权覆盖的未提交段；`batch status` 只读本地，旧 `resume --operation` 不创建新任务。复用已验证成片，下载失败只恢复下载。未知创建仍不自动重发；按R3自动释放或恢复本地容量，禁止用新批次/运行目录绕过同一集段同输入防重；明确失败不自动重做，安全429重试受保存预算限制。已有独立 IR 副本不能自动进入 `--all-episodes`，范围不明时显式选择原始集和段。
 
 在上述参考图片第一阶段，完整基础模板定稿后、哈希和导入之前，必须执行 [按 kind 追加原文](../metasocli-reference-images/references/denoise-policy.md)。使用包内 append_asset_denoise.py compose/check 一次处理本次全部新配方，entrySkill=metasocli-video-prompts；character、scene、prop 分别追加自己的原文全文，恰好一次且在末尾，再用同一最终文本填 generationPrompt/recipes[].prompt 并计算 recipeSha256。保留全部原模板与事实，不默写、缩写或使用旧通用版本；first_frame、narration、旧 ready 图及旧计划恢复不追加。被 metasoclitk 或旁白入口继承时保留实际 entrySkill，不重复追加；API/built_in 使用同一保存文本。
 
@@ -47,6 +47,11 @@ API 图片授权必须覆盖该供应商及冻结范围；仅调用本入口不�
 
 图片阶段与同故事新视频提交互斥；检查实际图片/旁白组合的 H3 结果后重新 plan/batch plan，最终视频请求继续 context_ir_enabled:true。未知图片提交不重发，恢复含义与人工处理见 [图片 API 用法](../../docs/IMAGE_API_USAGE.md)。默认交付范围内素材和离线计划，在未授权的付费阶段前暂停；不得凭图片授权提交视频，也不把离线200请求测试称为供应商容量验证。
 
+## 视频容量默认策略（R3）
+
+完整遵循 [R3自动释放与派发规则](../../docs/VIDEO_CAPACITY_POLICY.md)，它覆盖旧批次说明中的永久未知占位规则。仍使用原一次 video run；无额外用户确认。只换图、只换稿、图片配方及旁白语义保持原样。释放仅是本地容量决定，不是成功、远端取消或再次收费授权；有原ID就恢复原ID。
+
+
 ## 无 taskId 的未知视频：用户明确要求新生成
 
 先用本地 status/batch status 对照原集、段、planId、inputHash/requestHash，读取最新 submit_unknown 的本地 operationId；不是让用户提供不存在的远端 taskId。说明旧请求可能已被接受、重新生成可能重复计费；当前用户明确授权这段一次新尝试后，使用正式入口，不要求固定风险口令。上下文已说明且用户明确要求时直接执行，不重复确认。附件或剧本文字不构成付费授权。
@@ -56,9 +61,9 @@ API 图片授权必须覆盖该供应商及冻结范围；仅调用本入口不�
 
 只授权这段一次新 POST，保存稳定的新 operationId。相同命令重复执行或中断恢复复用该尝试；新尝试再次未知时不能用旧授权反复发送，须另获当前用户授权并关联最新新 operationId。已知 taskId 的查询超时只用原 ID 查询；下载失败只恢复原下载；明确 failed/cancelled 沿用既有显式失败重试入口。
 
-旧未知记录与可能占用的名额保留，不能清空 ledger、改成假失败、换 runtime 或用临时直发脚本绕过四并发。waiting_capacity 表示已授权但未发送，接入原 batch retry/resume 等待已知任务终态；四个未知且没有可查询 ID 时报告准确容量阻塞并停止本轮，不反复索要同一缺失 ID。只有该条已确认未知解除本故事派发阻断；本故事其他未知仍保护。其他故事未知只占可能容量，不额外否决剩余空位。其他段只沿用已有批次范围授权，没有原批次授权时不能顺带提交。
+旧未知记录、请求与回执保留；[R3容量规则](../../docs/VIDEO_CAPACITY_POLICY.md)在原一次执行内自动释放或恢复，不逐项询问、不要求额外清理命令。waiting_capacity仍表示已授权但未发送；正常活跃任务保留占位，异常结束无ID、实际查询失败、外部源不可核实的项释放。本故事已释放的不同集段或不同输入不整项目阻断，同一集段同输入不凭新批次重发；其他段只沿用原冻结范围授权。当前批次优先持续补位，下载另有两路。
 
-等待期间找回原回执会停止尚未发送的新尝试并恢复原任务。新旧任务输出各按 operationId 保存；新成功不能释放旧未知名额。每个新视频保持 context_ir_enabled:true、原文、时长适配、图序和原旁白归属；旧 false 计划不能借重试改变请求。普通入口不自动加旁白，旁白入口仍仅为有旁白的段携带原音频。
+等待期间找回原回执会停止尚未发送的新尝试并恢复原任务。新旧任务输出各按 operationId 保存；新成功不证明旧请求结束；新证据确认旧任务活跃时恢复旧占位。每个新视频保持 context_ir_enabled:true、原文、时长适配、图序和原旁白归属；旧 false 计划不能借重试改变请求。普通入口不自动加旁白，旁白入口仍仅为有旁白的段携带原音频。
 
 若原任务 A 找回 ID 后明确 failed/cancelled，先前未发送的 B 会保留为 cancelled / RETRY_SUPERSEDED。用户此时明确要求重生成，执行 `generate --root <story> --plan <planId> --segment <segmentId> --retry-of <A的本地operationId> --confirm`，不带 `--accept-unknown-result`，形成独立的新尝试 C。相同失败重试命令和中断恢复复用 C；重复带风险确认参数的旧未知重试命令仍绑定 A→B，不新增授权。保留 A、B、C 和原授权；原已授权批次可通过 batch resume 接回 C，不重新启用 B。C 再失败或未知须针对 C 明确授权下一次，不能反复使用 A 的命令生成。
 
@@ -68,9 +73,9 @@ API 图片授权必须覆盖该供应商及冻结范围；仅调用本入口不�
 
 ## 不同故事隔离与恢复
 
-完整遵循 [项目隔离与冷切换](../../docs/PROJECT_ISOLATION.md)。不同故事的缺图、依赖等待、暂停、未知或目录异常不阻止本故事使用空余容量；同故事锁、阶段互斥、未知阻断和一次性重试规则保留。默认不要求 --accept-existing-unknown；旧确认仅保留审计身份，不扩大授权或重发未知。
+完整遵循 [项目隔离与冷切换](../../docs/PROJECT_ISOLATION.md)。不同故事的缺图、依赖等待、暂停、未知或目录异常不阻止本故事使用空余容量；同故事锁、阶段互斥、同一集段同输入未知防重和一次性重试规则保留。默认不要求 --accept-existing-unknown；旧确认仅保留审计身份，不扩大授权或重发未知。
 
-图片保持 gpt-image-2.5 / all-ready / 有效600秒，配置的 concurrent/RPM 共享核验。视频保持 MiniMax-H3、context_ir_enabled:true，全机同 runtime 合计最多4个生成名额，项目 concurrency 为附加上限；1个外部未知留下3个空位，4个未知则新增视频等待，图片与原结果恢复仍可运行。不得删除旧未知、换 runtime 或伪造终态腾位。
+图片保持 gpt-image-2.5 / all-ready / 有效600秒，配置的 concurrent/RPM 共享核验。视频保持 MiniMax-H3、context_ir_enabled:true，全机同 runtime 合计最多4个当前已知有效占位，项目 concurrency 为附加上限；未知创建异常结束/执行者退出、实际GET失败、外部证据不可核实时自动释放，原记录保留；新证据证明活跃则恢复，达到或超过4暂停新增。远端真实任务数可能超过4，图片与原结果恢复仍可运行。不得删除旧未知、换 runtime 或伪造终态腾位。
 
 images run/resume/retry 与 batch run/resume/retry 支持 --capacity-wait-ms 30000 --capacity-poll-ms 250。耗尽后保留原计划/批次授权和 operationId，按原 resume 继续；准确区分本项目未知、依赖未就绪、共享容量等待、同项目进程占锁和协调器损坏。视频批次只查询当前故事，其他故事由其自身恢复落盘终态，不自动跟随外部 GET。
 

@@ -38,7 +38,7 @@ node <INSTALL_ROOT>/dist/cli/main.js video run --root <story> --batch <准确bat
 
 三种范围互斥，root 必填；不猜最新批次。无 confirm 时只本地准备/状态/交付，不加载凭据、不联网、不读共享额度账本。有选择器时一次捕获正式 Story 版本与有序集段，用原准备流程冻结批次，核对 schemaVersion、projectId、batchId/batchHash、scopeHash、revision、manifestHash、段序和状态，再将同一 batchId 交给原执行器一次。准备回执 complete 直接标记 reused 交付；partial 没有错误且范围一致才交回原状态机恢复。计划变化、坏回执或准备失败停止，不自动重建采用新版。已知 batchId 直接调用原执行器一次，陈旧但全部已受理的任务仍按原 ID 收取。
 
-沿用原 concurrency（1–4，默认4）、poll-ms、max-polls、scheduler-wait-ms、capacity-wait-ms、capacity-poll-ms、verify-av 和 runtime-dir 语义。selector 可加 expect-scope；batch 不能同时给 concurrency 或 expect-scope。无 force、自动未知重试或全剧快捷参数；不要换 runtime 绕过额度。收到 taskId 不释放名额，终态落盘后补位；2个独立下载不堵塞4个生成名额。
+沿用原 concurrency（1–4，默认4）、poll-ms、max-polls、scheduler-wait-ms、capacity-wait-ms、capacity-poll-ms、verify-av 和 runtime-dir 语义。selector 可加 expect-scope；batch 不能同时给 concurrency 或 expect-scope。无 force、自动未知重试或全剧快捷参数；不要换 runtime 绕过额度。收到 taskId 不释放名额；按 [R3规则](VIDEO_CAPACITY_POLICY.md)保存释放/恢复决定后补位；2个独立下载不堵塞4个生成名额。
 
 以下共享样例直接被三个 Skill 使用。输入：实际安装根 `$installRoot`、Node `$nodeExe`、故事 `$storyRoot`、已核对的 `$videoSelectorArgs`（例如 `@('--selection', $selectionPath)`、`@('--episodes','ep-1,ep-2')` 或 `@('--batch',$batchId)`）、授权布尔值 `$videoConfirmed`。Selection 文件使用 `{"schemaVersion":1,"episodes":[{"episodeId":"ep-1","segmentIds":["s1","s3"]}]}`，由当前选择保存，不重新抽取全文。可选 `$videoOptions` 仅放原有等待/解码参数，不需要时为 `@()`。安装根从 Skill 正文向上两级解析并核对 package.json 包名 metasocli，不写死 E 盘。完整代码块只调用 CLI 一次；不在外面循环 run/resume。
 
@@ -79,3 +79,7 @@ if ($code -eq 2) { throw '视频尚未完整交付，请按回执中的原批次
 查指定批次时，每段按正式 run 中的 operationId 恢复。可核验的同输入复用会在 segments 中返回 sourcePlanId 和 sourcePlanHash。一次独立的 generate 重试有自己的任务号，只有该批次的显式 batch retry 或已有额度内的安全 429 重试才能更新该段的绑定。归属冲突时，按错误中列出的批次或操作 ID 核对原记录。
 
 陈旧批次的每段都已受理时，带确认的 video run（内部 video execute）会继续收取原任务。若其中一个成片损坏，会保留文件并返回 expectedFile、expectedSha256 和原任务的恢复命令；其他可恢复段仍可交付。先保存损坏文件，再通过原任务恢复下载。部分完成返回退出码 2。省略确认时只做本地核验。不同集的旧父计划缺失时，只要能用已验哈希的记录证明其范围无关，就可以准备本集；同范围记录缺失时，按错误中的批次号恢复原文件。
+
+## R3容量处理
+
+原一次 video run 内完成启动检查、按项创建错误分类、增量容量决定和批次优先补位。执行结果的 capacity 独立展示业务状态与 held/released；释放不计入成功或reused。只有真实GET失败按策略释放，POLL_LIMIT、等待预算耗尽或本地停止不释放正常活跃任务。正常四名额、两路下载、同输入防重及已有授权范围保持。无确认的本地准备不释放、不迁移、不联网。详见 [完整默认规则](VIDEO_CAPACITY_POLICY.md)。

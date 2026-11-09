@@ -8,7 +8,8 @@ import { ProviderError, type VideoClient, type Submission } from '../metaso/clie
 import type { Fetch } from '../metaso/transport.js';
 import { listJobs, readJob, persistence, saveEvidence, type Persistence } from './store.js';
 import { assertTaskIdAvailable, checkSubmissionConflicts, operationKind, verifyRemoteAssets } from './submission-guard.js';
-import { capacityAvailable, blockingSlots, runtimeDirectory, withCoordinator, reconcileRuntime, requireScheduler, slotFor } from './coordinator.js';
+import { capacityAvailable, blockingSlots, runtimeDirectory, capacityTransaction, reconcileRuntime, requireScheduler, slotFor, ensureRegistered, inspectRuntime, refreshTickets, setDispatchTicket, closeDispatchTicket, initialCapacity, mergeJob,dispatchEntered,mergeRecoveredJob,receiptRecoveryNeeded } from './coordinator.js';
+import { publishCapacity, startCapacityAudit,capacitySignal } from './capacity-events.js';
 import { authorizeVideoRetry, effectiveJobs, listVideoRetries, materializeRetry, readVideoRetry, supersededRetry } from './video-retry.js';
 import { saveSubmissionOwner, submissionLeasePath } from './submission-owner.js';
 import { projectPath } from '../storage/paths.js';
@@ -18,6 +19,7 @@ export interface JobDependencies {
   client: VideoClient; fetcher?: Fetch; persistence?: Persistence; sleep?: (ms: number) => Promise<void>;
   runtimeRoot?: string; schedulerToken?: string; capacity?: number; dispatchBatchId?: string; expectedOperationId?:string;
   checkpoint?: (event: string, job: Job) => Promise<void>;
+  dispatchTicketId?: string;
 }
 function choose(jobs: Job[], episodeId: string, segmentId: string, inputHash: string, retryOf?: string) {
   jobs = effectiveJobs(jobs);
@@ -45,6 +47,13 @@ async function validatePreparedRetry(root: string, planId: string, job: Job | un
   }
   return undefined;
 }
+async function recoverReturnedCapacity(root:string,job:Job,runtime:string){
+  await ensureRegistered(root,runtime);
+  const slot=(await inspectRuntime(runtime)).slots.find(s=>s.operationId===job.operationId);
+  if((!slot && job.status!=='prepared') || slot && (slot.taskId!==job.taskId || receiptRecoveryNeeded(slot,job.taskId)))
+    await capacityTransaction(runtime,async ledger=>{await mergeRecoveredJob(ledger,root,job);});
+  const audit=startCapacityAudit(runtime);await audit.done;audit.check();return job;
+}
 /** Persist/reserve under short locks, POST exactly once outside locks, persist receipt before indexing. */
 export async function submit(root: string, planId: string, segmentId: string, authorized: boolean, deps: JobDependencies, retryOf?: string, acceptUnknownResult = false): Promise<Job> {
   if (authorized !== true) fail('GENERATION_NOT_AUTHORIZED', 'Generation requires explicit authorization for this plan.');
@@ -56,7 +65,7 @@ export async function submit(root: string, planId: string, segmentId: string, au
   if (acceptUnknownResult) {
     if (!retryOf) fail('CLI_ARGUMENT', '--accept-unknown-result requires one local --retry-of operation.');
     const result = await authorizeVideoRetry(root, planId, segmentId, retryOf, authorized, true, runtime, deps.checkpoint);
-    if (result.job.operationId === retryOf || result.job.status !== 'prepared') return result.job;
+    if (result.job.operationId === retryOf || result.job.status !== 'prepared') return recoverReturnedCapacity(root,result.job,runtime);
   }
   // Repair only the pre-intent authorization checkpoint, including batch resume after a crash.
   const savedRetries = await listVideoRetries(root, runtime);
@@ -68,10 +77,18 @@ export async function submit(root: string, planId: string, segmentId: string, au
       if (a.planId !== planId || a.segmentId !== segmentId) fail('RETRY_CONFLICT', 'Saved retry belongs to another plan or segment.');
       const job = await withProjectWrite(root, () => materializeRetry(root, a));
       const ordinaryFailure = !acceptUnknownResult && job.operationId === retryOf && ['failed', 'cancelled'].includes(job.status) && await supersededRetry(root, a);
-      if (!ordinaryFailure && (job.operationId === retryOf || job.status !== 'prepared')) return job;
+      if (!ordinaryFailure && (job.operationId === retryOf || job.status !== 'prepared')) return recoverReturnedCapacity(root,job,runtime);
     }
   }
-  const initial = choose(await listJobs(root), plan.episodeId, segmentId, segment.inputHash, retryOf);
+  const initialJobs=await listJobs(root);
+  const initial = choose(initialJobs, plan.episodeId, segmentId, segment.inputHash, retryOf);
+  const indexKnown=async()=>{
+    await ensureRegistered(root,runtime);
+    await capacityTransaction(runtime,async ledger=>{for(const job of initialJobs){
+      const slot=ledger.slots.find(s=>s.operationId===job.operationId);
+      if(job.status!=='prepared'&&(!slot||receiptRecoveryNeeded(slot,job.taskId)))await mergeRecoveredJob(ledger,root,job);
+    }});
+  };
   const assertSelection=(previous:Job|undefined)=>{
     if(deps.dispatchBatchId && previous?.status==='prepared'
       && (previous.planId!==planId || (!deps.expectedOperationId && previous.retryOf)))fail('BATCH_OPERATION_CONFLICT','Unbound prepared attempt requires an exact batch choice: '+previous.operationId);
@@ -83,16 +100,31 @@ export async function submit(root: string, planId: string, segmentId: string, au
   if (initial.reuse) {
     await operationKind(root, initial.previous!.operationId);
     if (initial.previous!.status === 'submitting') fail('LOCK_BUSY', 'This request is still owned by its submitting process.');
-    await reconcileRuntime(root, runtime); return initial.previous!;
+    await indexKnown();
+    return recoverReturnedCapacity(root,initial.previous!,runtime);
   }
   // Network reference validation is outside project/shared locks. Rebuild locally again when reserving.
   const preflight = await validatePlan(root, plan);
   await verifyRemoteAssets(preflight.story, preflight.built.find(b => b.summary.segmentId === segmentId)!.summary.assets, deps.fetcher);
   await deps.client.prepare?.();
-  let owner: Lease | undefined;
+  await indexKnown();
+  const signal=deps.dispatchTicketId?undefined:capacitySignal(runtime);
+  const audit=deps.dispatchTicketId?undefined:startCapacityAudit(runtime);
+  let auditFinished=!audit;void audit?.done.then(()=>{auditFinished=true;});
+  const ticketId=deps.dispatchTicketId??randomUUID();
+  const ticketPath='.metasocli/dispatch-runs/'+ticketId+'.lock';
+  let owner: Lease | undefined,ticketLease:Lease|undefined;
   try {
-    const prepared = await withCoordinator(root, runtime, async (ledger, save) => withProjectWrite(root, async () => {
+    ticketLease=deps.dispatchTicketId?undefined:await acquireLease(await projectPath(root,ticketPath));
+    if(ticketLease)await setDispatchTicket(runtime,{id:ticketId,root,projectId:plan.projectId,binding:segment.inputHash,token:ticketLease.token,lease:ticketPath,capacity:deps.capacity??4,remaining:1,eligible:true,kind:'single'});
+    while(audit&&signal){
+      const version=signal.version;const current=await inspectRuntime(runtime);audit.check();
+      if(capacityAvailable(root,current,deps.capacity??4,undefined,ticketId)||auditFinished)break;
+      await Promise.race([audit.done,signal.wait(version)]);
+    }
+    const prepared = await capacityTransaction(runtime, async (ledger, save) => withProjectWrite(root, async () => {
       await requireScheduler(root, runtime, deps.schedulerToken);
+      await refreshTickets(ledger);
       for (const a of applicable) {
         const target = await materializeRetry(root, a);
         // Recovered active A still supersedes an unstarted B. A terminal A can
@@ -101,6 +133,10 @@ export async function submit(root: string, planId: string, segmentId: string, au
           && (acceptUnknownResult || !['failed', 'cancelled'].includes(target.status) || !await supersededRetry(root, a))) return { job: target };
       }
       const jobs = await listJobs(root), selected = choose(jobs, plan.episodeId, segmentId, segment.inputHash, retryOf);
+      for(const job of jobs){
+        const slot=ledger.slots.find(s=>s.operationId===job.operationId);
+        if(job.status!=='prepared'&&(!slot||receiptRecoveryNeeded(slot,job.taskId)))await mergeRecoveredJob(ledger,root,job);
+      }
       assertSelection(selected.previous);
       if (selected.reuse) {
         if (selected.previous!.status === 'submitting') fail('LOCK_BUSY', 'This request is still submitting.');
@@ -112,7 +148,8 @@ export async function submit(root: string, planId: string, segmentId: string, au
         if (target.operationId === pendingAuthorization.oldOperationId) return { job: target };
       }
       const acknowledgements = await listVideoRetries(root, runtime);
-      await checkSubmissionConflicts(root, plan.episodeId, segmentId, undefined, new Set(acknowledgements.map(a => a.oldOperationId)));
+      await checkSubmissionConflicts(root, plan.episodeId, segmentId, undefined, new Set(acknowledgements.map(a => a.oldOperationId)),
+        new Map(ledger.slots.filter(s=>s.capacity?.state==='released').map(s=>[s.operationId,s.inputHash])),segment.inputHash);
       if ((await blockingSlots(root, ledger, runtime,deps.dispatchBatchId?{batchId:deps.dispatchBatchId,planId,segmentId,requestHash:segment.requestHash,inputHash:segment.inputHash}:undefined)).length) fail('SUBMIT_UNKNOWN', 'This story contains an unacknowledged unknown task; recover it before creating.');
       const previous = selected.previous;
       const held = previous?.status === 'prepared' ? ledger.slots.find(s => s.operationId === previous.operationId) : undefined;
@@ -121,7 +158,7 @@ export async function submit(root: string, planId: string, segmentId: string, au
       }
       const capacity = deps.capacity ?? 4;
       if (!Number.isInteger(capacity) || capacity < 1 || capacity > 4) fail('CAPACITY_INVALID', 'Video capacity must be 1–4.');
-      if (!capacityAvailable(root, ledger, capacity, held?.operationId)) {
+      if (!capacityAvailable(root, ledger, capacity, held?.operationId,ticketId)) {
         if (previous?.status === 'prepared' && acknowledgements.some(a => a.newOperationId === previous.operationId)) return { job: previous };
         fail('CAPACITY_FULL', 'Remote video slots are occupied; query existing tasks first.');
       }
@@ -138,20 +175,32 @@ export async function submit(root: string, planId: string, segmentId: string, au
       owner = await acquireLease(await submissionLeasePath(root, job.operationId));
       await saveSubmissionOwner(root, job, owner.token, runtime);
       const index = ledger.slots.findIndex(s => s.operationId === job.operationId);
-      const slot = { ...slotFor(root, job), status: 'reserved' as const };
+      const slot = { ...slotFor(root, job), status: 'reserved' as const,capacity:initialCapacity({...job,status:'reserved'}) };
+      if(held?.capacity)slot.capacity={...held.capacity,state:'held',reason:'reserved',version:held.capacity.version+1,decidedAt:now};
       if (index < 0) ledger.slots.push(slot); else ledger.slots[index] = slot;
+      const ticket=ledger.tickets!.find(t=>t.id===ticketId)!;
+      ticket.remaining--;ticket.entering??=[];ticket.entering.push(job.operationId);
       await save(); await deps.checkpoint?.('reserved', job);
       job.status = 'submitting'; job.submittedAt = new Date().toISOString(); job.updatedAt = job.submittedAt;
       await disk.job(root, job); await deps.checkpoint?.('intent', job);
       return { job, request };
     }));
-    if (!prepared.request) return prepared.job;
+    if (!prepared.request) return recoverReturnedCapacity(root,prepared.job,runtime);
     const job = prepared.job;
     await owner!.assertOwned();
     let receipt: Submission;
     const started = performance.now();
     try {
-      receipt = await deps.client.create(prepared.request);
+      // Keep the last reserved-but-not-entered request in the dispatch cursor until its transport starts.
+      // No public lock spans network I/O. Attach rejection handling immediately while publishing the cursor.
+      const sending=Promise.resolve().then(()=>deps.client.create(prepared.request!)).then(value=>({value}),error=>({error}));
+      await Promise.resolve();
+      // A cursor write failure cannot discard an already-started POST's eventual receipt.
+      // The receipt/index transaction below also repairs the cursor.
+      await dispatchEntered(runtime,ticketId,job.operationId).catch(()=>{});
+      const outcome=await sending;
+      if('error' in outcome)throw outcome.error;
+      receipt = outcome.value;
       parse(Receipt, { operationId: job.operationId, requestHash: job.requestHash, taskId: receipt.taskId, receivedAt: new Date().toISOString() });
     } catch (error) {
       const failed = await withProjectWrite(root, async () => {
@@ -170,23 +219,33 @@ export async function submit(root: string, planId: string, segmentId: string, au
         }
         current.updatedAt = new Date().toISOString(); await disk.job(root, current); return current;
       });
-      await reconcileRuntime(root, runtime);
+      await publishCapacity(root,failed,failed.taskId?'provider_terminal':'create_ended_without_id',{status:failed.status,error:failed.lastError},runtime,deps.checkpoint);
       return failed;
     }
     try {
-      await withCoordinator(root, runtime, async ledger => withProjectWrite(root, async () => {
+      await withProjectWrite(root, async () => {
         await owner!.assertOwned();
-        if (ledger.slots.some(s => s.operationId !== job.operationId && s.taskId === receipt.taskId)) fail('TASK_LINK_CONFLICT', 'Remote task ID is already registered to another project.');
-        await assertTaskIdAvailable(root, receipt.taskId, job.operationId);
         await disk.receipt(root, { operationId: job.operationId, requestHash: job.requestHash, taskId: receipt.taskId, receivedAt: new Date().toISOString(), recoveredManually: false });
         await deps.checkpoint?.('receipt', job);
+        await assertTaskIdAvailable(root, receipt.taskId, job.operationId);
         job.taskId = receipt.taskId; job.status = 'queued'; job.updatedAt = new Date().toISOString();
         await disk.job(root, job); await saveEvidence(root, job, receipt.evidence); await disk.job(root, job);
-      }));
+      });
+      await capacityTransaction(runtime, async ledger => {
+        if (ledger.slots.some(s => s.operationId !== job.operationId && s.taskId === receipt.taskId)) fail('TASK_LINK_CONFLICT', 'Remote task ID is already registered to another project.');
+        mergeJob(ledger,root,job);
+        const ticket=ledger.tickets?.find(t=>t.id===ticketId);
+        if(ticket)ticket.entering=(ticket.entering??[]).filter(op=>op!==job.operationId);
+      });
     } catch {
       throw new MetasoError('RECEIPT_PERSISTENCE', 'Receipt save failed. Operation ' + job.operationId + ', remote task ' + receipt.taskId + '. Preserve these IDs and use attach-task/resume.');
     }
-    await reconcileRuntime(root, runtime);
+    await publishCapacity(root,job,'create_accepted',{taskId:job.taskId},runtime,deps.checkpoint);
     return job;
-  } finally { await owner?.release(); }
+  } finally {
+    try{
+      await owner?.release();
+      if(ticketLease){try{await closeDispatchTicket(runtime,ticketId);}finally{await ticketLease.release();}}
+    }finally{try{await audit?.close();}finally{signal?.close();}}
+  }
 }

@@ -11,7 +11,8 @@ import { persistence, readJob, saveEvidence } from './store.js';
 import type { JobDependencies } from './submit.js';
 import { downloadVideo, localVideoIssue, reconcileOutput } from './video.js';
 import { operationKind, assertTaskIdAvailable } from './submission-guard.js';
-import { terminal, reconcileRuntime, runtimeDirectory, withCoordinator } from './coordinator.js';
+import { terminal, runtimeDirectory, capacityTransaction, ensureRegistered, mergeJob } from './coordinator.js';
+import { beginCapacityObservation, recordCapacityEvent, publishCapacity } from './capacity-events.js';
 
 const Options = z.object({
   maxPolls: z.number().int().min(1).max(720).default(60), pollIntervalMs: z.number().int().min(0).max(60000).default(5000),
@@ -38,8 +39,22 @@ async function observe(root: string, snapshot: Job, deps: JobDependencies, optio
   const plan = await loadPlan(root, snapshot.planId), planned = plan.segments.find(s => s.segmentId === snapshot.segmentId)!;
   let observed: Observation | undefined, error: unknown;
   try {
-    observed = await queryWithRetry(deps.client, snapshot.taskId!, options, deps.sleep ?? delay);
-    if (observed.taskId !== snapshot.taskId) throw new ProviderError('QUERY_CONTRACT', 'Query returned a different task ID.', { evidence: observed.evidence });
+    observed = await queryWithRetry({...deps.client,async query(taskId){
+      const runtime=runtimeDirectory(deps.runtimeRoot),sequence=await beginCapacityObservation(root,snapshot,runtime);
+      let result:Observation|undefined,failure:unknown;
+      try{
+        result=await deps.client.query(taskId);
+        if(result.taskId!==snapshot.taskId)throw new ProviderError('QUERY_CONTRACT','Query returned a different task ID.',{evidence:result.evidence});
+      }catch(e){failure=e;}
+      if(failure){
+        await recordCapacityEvent(root,snapshot,sequence,'query_unavailable',publicError(failure),runtime,deps.checkpoint);
+        throw failure;
+      }
+      const state=result!.status;
+      await recordCapacityEvent(root,{...snapshot,status:state==='unknown'?'query_unknown':state},sequence,
+        state==='unknown'?'query_unavailable':terminal(state)?'provider_terminal':'remote_active_recovered',result!.evidence,runtime,deps.checkpoint);
+      return result!;
+    }}, snapshot.taskId!, options, deps.sleep ?? delay);
   } catch (failure) { error = failure; }
   const job = await withProjectWrite(root, async () => {
     const current = await readJob(root, snapshot.operationId);
@@ -54,7 +69,7 @@ async function observe(root: string, snapshot: Job, deps: JobDependencies, optio
       await saveEvidence(root, current, result.evidence);
       current.rawStatus = result.rawStatus; current.status = result.status === 'unknown' ? 'query_unknown' : result.status;
       delete current.lastError;
-      if (current.status === 'query_unknown') current.lastError = { code: 'QUERY_UNKNOWN', message: 'Unrecognized task state; preserve its occupied slot and query again later.' };
+      if (current.status === 'query_unknown') current.lastError = { code: 'QUERY_UNKNOWN', message: 'Unrecognized task state; local capacity is released, but the original task remains unresolved.' };
       if (current.status === 'generated' && ((result.duration !== undefined && result.duration !== planned.duration)
         || (result.resolution !== undefined && result.resolution !== planned.resolution)
         || (result.ratio !== undefined && planned.effectiveRatio !== 'adaptive' && result.ratio !== planned.effectiveRatio) || !result.url)) {
@@ -69,7 +84,7 @@ async function observe(root: string, snapshot: Job, deps: JobDependencies, optio
     return current;
   });
   if (terminal(job.status)) await deps.checkpoint?.('release-before', job);
-  await reconcileRuntime(root, deps.runtimeRoot);
+  await capacityTransaction(runtimeDirectory(deps.runtimeRoot),async ledger=>{mergeJob(ledger,root,job);});
   if (terminal(job.status)) await deps.checkpoint?.('released', job);
   return { job, url: !job.lastError && job.status === 'generated' && observed && observed.taskId === job.taskId && observed.status === 'generated' ? observed.url : undefined, planned };
 }
@@ -84,15 +99,18 @@ export async function resume(root: string, operationId: string, deps: JobDepende
     if (!job.taskId) fail(job.status === 'prepared' ? 'NOT_SUBMITTED' : 'SUBMIT_UNKNOWN', 'No confirmed task ID; resume cannot create. Recover the original ID, or explicitly authorize one new video attempt with generate --retry-of / batch retry --accept-unknown-result.');
     const forOutput = options.redownloadMissing && job.status === 'downloaded' ? { ...job, status: 'generated' as const, output: undefined } : job;
     const existing = await reconcileOutput(root, forOutput);
-    if (existing) return withProjectWrite(root, async () => {
+    if (existing) {
+      const restored=await withProjectWrite(root, async () => {
       const latest = await readJob(root, operationId); latest.output = existing; latest.status = 'downloaded'; delete latest.lastError;
       latest.updatedAt = new Date().toISOString(); await disk.job(root, latest); return latest;
-    });
+      });
+      await publishCapacity(root,restored,'provider_terminal',{output:restored.output},runtimeDirectory(deps.runtimeRoot),deps.checkpoint);return restored;
+    }
     if (options.redownloadMissing && job.status === 'downloaded') job = await withProjectWrite(root, async () => {
       const latest = await readJob(root, operationId); latest.status = 'generated'; delete latest.output;
       await disk.job(root, latest); return latest;
     });
-    if (['failed', 'cancelled'].includes(job.status)) { await reconcileRuntime(root, deps.runtimeRoot); return job; }
+    if (['failed', 'cancelled'].includes(job.status)) { await publishCapacity(root,job,'provider_terminal',{status:job.status},runtimeDirectory(deps.runtimeRoot),deps.checkpoint); return job; }
     for (let poll = 0; poll < options.maxPolls; poll++) {
       const result = await observe(root, job, deps, options); job = result.job;
       if (job.status === 'generated' && options.download && result.url) {
@@ -114,10 +132,11 @@ export async function resume(root: string, operationId: string, deps: JobDepende
             current.updatedAt = new Date().toISOString(); await disk.job(root, current); return current;
           });
         }
-        return await withProjectWrite(root, async () => {
+        const downloaded=await withProjectWrite(root, async () => {
           const current = await readJob(root, operationId); current.output = output; current.status = 'downloaded';
           delete current.lastError; current.updatedAt = new Date().toISOString(); await disk.job(root, current); return current;
         });
+        await capacityTransaction(runtimeDirectory(deps.runtimeRoot),async ledger=>{mergeJob(ledger,root,downloaded);});return downloaded;
       }
       if (terminal(job.status) || job.status === 'query_unknown' || job.lastError || options.observeOnly) return job;
       if (poll + 1 < options.maxPolls) await sleep(options.pollIntervalMs);
@@ -141,14 +160,15 @@ export async function attachTask(root: string, operationId: string, taskId: stri
   const observed = await queryWithRetry(deps.client, taskId, Options.parse({}), deps.sleep ?? delay);
   if (observed.taskId !== taskId) fail('QUERY_CONTRACT', 'Provider task identity mismatch.');
   const disk = deps.persistence ?? persistence;
-  const job = await withCoordinator(root, runtimeDirectory(deps.runtimeRoot), async ledger => withProjectWrite(root, async () => {
+  await ensureRegistered(root,runtimeDirectory(deps.runtimeRoot));
+  const job = await capacityTransaction(runtimeDirectory(deps.runtimeRoot), async ledger => withProjectWrite(root, async () => {
     const current = await readJob(root, operationId);
     if (current.taskId || current.status !== 'submit_unknown') fail('TASK_LINK_CONFLICT', 'Task already recovered or no longer unknown.');
     if (ledger.slots.some(s => s.operationId !== operationId && s.taskId === taskId)) fail('TASK_LINK_CONFLICT', 'Task ID already registered in another project.');
     await assertTaskIdAvailable(root, taskId, operationId);
     await disk.receipt(root, { operationId, taskId, requestHash: current.requestHash, receivedAt: new Date().toISOString(), recoveredManually: true });
-    current.taskId = taskId; current.status = 'queued'; delete current.lastError; current.updatedAt = new Date().toISOString();
-    await disk.job(root, current); await saveEvidence(root, current, observed.evidence); await disk.job(root, current); return current;
+    current.taskId = taskId; current.status = observed.status==='unknown'?'query_unknown':observed.status; delete current.lastError; current.updatedAt = new Date().toISOString();
+    await disk.job(root, current); await saveEvidence(root, current, observed.evidence); await disk.job(root, current);mergeJob(ledger,root,current); return current;
   }));
-  await reconcileRuntime(root, deps.runtimeRoot); return job;
+  await publishCapacity(root,job,observed.status==='unknown'?'query_unavailable':terminal(observed.status)?'provider_terminal':'remote_active_recovered',observed.evidence,runtimeDirectory(deps.runtimeRoot),deps.checkpoint); return job;
 }

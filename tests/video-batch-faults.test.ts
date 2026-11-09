@@ -97,9 +97,12 @@ it.each(['429-id','429-ambiguous','429-null','500','timeout','conflicting-id'])(
     return Response.json({task_id:'one',task:{id:'two'}});
   });
   const result=await runBatch(f.root,f.batch.plan.batchId,true,{client},polling);
-  expect(posts).toBe(1);expect(result.items[0]!.job!.status).toBe('submit_unknown');
-  await runBatch(f.root,f.batch.plan.batchId,false,{client},polling);expect(posts).toBe(1);
-  expect(occupied(await reconcileRuntime(f.root))).toHaveLength(1);
+  // R3 releases each ended unknown, then dispatches the other authorized inputs exactly once.
+  expect(posts).toBe(5);expect(result.items.every(i=>i.job?.status==='submit_unknown')).toBe(true);
+  const original=(await listJobs(f.root)).map(j=>j.operationId);
+  await runBatch(f.root,f.batch.plan.batchId,false,{client},polling);expect(posts).toBe(5);
+  expect((await listJobs(f.root)).map(j=>j.operationId)).toEqual(original);
+  expect(occupied(await reconcileRuntime(f.root))).toHaveLength(0);
 },30000);
 
 it('persists a finite safe-429 retry budget and does not reset it on resume',async()=>{
@@ -123,14 +126,14 @@ it('persists a successful safe-429 retry without an obsolete retry link or dupli
   await runBatch(f.root,f.batch.plan.batchId,false,deps,polling);expect(posts).toBe(2);
 },30000);
 
-it('retains query-unknown occupancy; definitive task failure releases capacity without retrying that segment',async()=>{
+it('R3 releases query-unknown capacity; original-ID recovery and definitive failure do not regenerate the segment',async()=>{
   const f=await batchFixture([6]);let posts=0,unknown=true,release!:()=>void;
   const firstFour=new Promise<void>(r=>{release=r;});
   const client:VideoClient={async create(){const n=++posts;if(n===4)release();if(n<=4)await firstFour;return {taskId:'state-'+ n,evidence};},async query(taskId){
     return {taskId,status:unknown?(taskId==='state-1'?'unknown':'running'):'failed',rawStatus:unknown?(taskId==='state-1'?'new-state':'running'):'failed',evidence};
   }};
   const first=await runBatch(f.root,f.batch.plan.batchId,true,{client},polling);
-  expect(posts).toBe(4);expect(first.items[0]!.job!.status).toBe('query_unknown');expect(occupied(await reconcileRuntime(f.root))).toHaveLength(4);
+  expect(posts).toBe(5);expect(first.items[0]!.job!.status).toBe('query_unknown');expect(occupied(await reconcileRuntime(f.root))).toHaveLength(4);
   unknown=false;const second=await runBatch(f.root,f.batch.plan.batchId,false,{client},polling);
   expect(posts).toBe(6);expect(second.summary.failed).toBe(6);expect(second.run!.status).toBe('partial_failed');
 },60000);
