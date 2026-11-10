@@ -1,6 +1,6 @@
 {
   "name": "metasocli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Independent local story and Metaso H3 video task CLI",
   "type": "module",
   "private": true,

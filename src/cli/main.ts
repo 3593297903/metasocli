@@ -35,7 +35,7 @@ import { readImageJob } from '../images/store.js';
 import { prepareImages } from '../images/preparation.js';
 import { collectImages, imageSummary, imageBlockerCategory } from '../images/reporting.js';
 
-export const HELP = `metasocli 0.1.0 — independent Metaso MiniMax-H3 CLI
+export const HELP = `metasocli 0.2.0 — independent Metaso MiniMax-H3 CLI
 All story commands require --root <dedicated-story-directory>.
 
 auth status
@@ -172,7 +172,7 @@ export interface CliResult { exitCode: number; data: unknown }
 export async function runCli(args: string[], injected?: VideoWorkflowDependencies & { irClient?: ContextIrClient; irPersistence?: IrPersistence }, imageInjected?: ImageDependencies): Promise<CliResult> {
   try {
     if (!args.length || args.includes('--help') || args[0] === 'help') return { exitCode: 0, data: HELP };
-    if (args[0] === '--version') return { exitCode: 0, data: '0.1.0' };
+    if (args[0] === '--version') return { exitCode: 0, data: '0.2.0' };
     const count = ['assets', 'auth', 'batch', 'images', 'video', 'prompts'].includes(args[0] ?? '') ? 2 : 1, command = args.slice(0, count).join(' '), spec = flags[command];
     if (!spec) fail('CLI_ARGUMENT', 'Unknown command. Run --help.');
     const options: Record<string, { type: 'string' | 'boolean' }> = { root: { type: 'string' }, json: { type: 'boolean' } };
@@ -322,7 +322,7 @@ export async function runCli(args: string[], injected?: VideoWorkflowDependencie
       const contextIrOperations = selected ? (kind === 'ir' ? [await readIrOperation(root, selected)] : []) : await listIrOperations(root);
       if (contextIrOperations.some(ir => jobs.some(job => job.operationId === ir.operationId))) fail('OPERATION_CONFLICT', 'Operation ID exists in both namespaces.');
       const videoRetries = await Promise.all((await listVideoRetries(root)).map(a => retryProgress(root, a)));
-      return { exitCode: 0, data: { version: '0.1.0', projectId: story.projectId, revision: story.revision, episodes: story.episodes.map(e => e.id), assets, jobs, contextIrOperations, videoRetries,
+      return { exitCode: 0, data: { version: '0.2.0', projectId: story.projectId, revision: story.revision, episodes: story.episodes.map(e => e.id), assets, jobs, contextIrOperations, videoRetries,
         capacity:capacitySnapshot(root,await inspectRuntime(v['runtime-dir'] as string|undefined??injected?.runtimeRoot)),
         ...(command === 'doctor' ? { node: process.version, credentials: await credentialStatus(), missingAssets: assets.filter(a => a.status !== 'ready').map(a => a.assetId), nativeApiVerifiedLive: false } : {}) } };
     }

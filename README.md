@@ -1,8 +1,8 @@
 # metasocli
 
-当前源码快照为 `metasocli-0.1.0-snapshot-20261109-capacity-r3`。恢复时使用该标签或其完整 Git 提交号。[R3 视频容量与恢复修复版本记录](docs/VERSION_SNAPSHOT_20261109_CAPACITY_R3.md)；[上一版一次视频流程记录](docs/VERSION_SNAPSHOT_20261107_VIDEO_RUN.md)；[一次换提示词记录](docs/VERSION_SNAPSHOT_20261107_PROMPT_REPLACEMENT.md)；[同 ID 换图记录](docs/VERSION_SNAPSHOT_20261107_IMAGE_REPLACEMENT.md)。
+当前版本为 `0.2.0`，恢复标签为 `v0.2.0`。恢复时使用该标签或其完整 Git 提交号。[0.2.0 版本记录](docs/VERSION_0.2.0.md)；[R3 视频容量与恢复修复版本记录](docs/VERSION_SNAPSHOT_20261109_CAPACITY_R3.md)；[上一版一次视频流程记录](docs/VERSION_SNAPSHOT_20261107_VIDEO_RUN.md)；[一次换提示词记录](docs/VERSION_SNAPSHOT_20261107_PROMPT_REPLACEMENT.md)；[同 ID 换图记录](docs/VERSION_SNAPSHOT_20261107_IMAGE_REPLACEMENT.md)。
 
-独立的 Node.js / TypeScript CLI，将完整剧本或成品视频提示词整理为 Metaso `MiniMax-H3` 请求计划，并管理提交、查询、恢复及视频下载。当前版本 **0.1.0**。2026-09-21 起默认视频请求明确启用 `context_ir_enabled:true`；本次切换只做离线验证，没有发起付费生成。
+独立的 Node.js / TypeScript CLI，将完整剧本或成品视频提示词整理为 Metaso `MiniMax-H3` 请求计划，并管理提交、查询、恢复及视频下载。当前版本 **0.2.0**。2026-09-21 起默认视频请求明确启用 `context_ir_enabled:true`；本次切换只做离线验证，没有发起付费生成。
 
 当前源码包含视频四并发持续补位、独立下载，以及 Windows 路径大小写和已完成项目归档的恢复修复。详见 [批次实施报告](docs/VIDEO_BATCH_CONCURRENCY_IMPLEMENTATION_REPORT.md) 与 [独立复核](docs/VIDEO_BATCH_CONCURRENCY_RECHECK.md)。
 
