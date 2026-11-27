@@ -2,6 +2,8 @@
 
 两个入口使用相同的原文追溯、素材和请求计划模块，`kind` 明确区分行为。
 
+使用 `$yiciyuang2.5cli` 编写创艺坊草稿时，每个分镜保存 `"seedance":{"assets":[]}` 或带有直接素材的同名字段。下文中的 15 秒、9 张图和 Context IR 适用于 H3。创艺坊目标为 5–30 秒，保留小数目标并向上取整。每段最多 30 张普通参考图、10 条参考音频、10 段参考视频。项目图写入有序的 `references`，其他绑定写入 `seedance.assets`。完整规则见[准备 Skill](../skills/yiciyuang2/SKILL.md)。
+
 当前业务草稿的 `parameters.contextIr` 明确写 true。默认新计划或显式 `--workflow h3-inline-ir` 均将实际视频请求设为 `context_ir_enabled:true`；历史清单省略该字段或存有 false 不会被原地改写，新计划的 workflow 和请求哈希记录实际覆盖值。生成使用计划，不直接把旧清单中的 false 交给 API。
 
 简单单段导入可用 README 命令。多段或带参考图时使用 `import --root <story> --draft <draft.json>`。`source` 相对草稿文件目录解析，其他写入都只进入 `--root`。

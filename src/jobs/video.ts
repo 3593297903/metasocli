@@ -83,8 +83,9 @@ export async function inspectVideo(file: string): Promise<Omit<SavedOutput, 'pat
   } finally { await handle.close(); }
 }
 const DownloadReceipt = z.object({ operationId: z.uuid(), taskId: z.string(), requestHash: z.string(), output: Output }).strict();
-const outputPath = (job: Job) => `outputs/${job.episodeId}/${job.segmentId}-${job.operationId}.mp4`;
-const downloadReceipt = (job: Job) => `.metasocli/receipts/${job.operationId}-download.json`;
+type DownloadJob = Pick<Job,'episodeId'|'segmentId'|'operationId'|'requestHash'|'status'|'taskId'|'output'>;
+const outputPath = (job: DownloadJob) => `outputs/${job.episodeId}/${job.segmentId}-${job.operationId}.mp4`;
+const downloadReceipt = (job: DownloadJob) => `.metasocli/receipts/${job.operationId}-download.json`;
 /** Cheap publication guard around the expensive MP4/receipt verification. */
 export async function outputVersion(root:string, job:Job) {
   const versions = await Promise.all([outputPath(job),downloadReceipt(job)].map(async path => {
@@ -102,7 +103,7 @@ export function localVideoIssue(code:string) {
   return ['OUTPUT_MISSING','OUTPUT_CHANGED','OUTPUT_RECEIPT_INVALID','OUTPUT_RECEIPT_MISSING','OUTPUT_METADATA','VIDEO_INVALID','VIDEO_CHANGED',
     'VIDEO_DURATION','VIDEO_RATIO','DOWNLOAD_FAILED','DOWNLOAD_REDIRECT','DOWNLOAD_TRUNCATED'].includes(code);
 }
-export async function reconcileOutput(root: string, job: Job, verifyRecorded = false): Promise<SavedOutput | undefined> {
+export async function reconcileOutput(root: string, job: DownloadJob, verifyRecorded = false): Promise<SavedOutput | undefined> {
   const target = await projectPath(root, outputPath(job));
   const present=await exists(target), receiptFile=await projectPath(root,downloadReceipt(job));
   if (job.output && job.output.path!==outputPath(job)) fail('OUTPUT_CONFLICT','Recorded output points outside this operation.');
@@ -128,8 +129,9 @@ export async function reconcileOutput(root: string, job: Job, verifyRecorded = f
   if(job.status==='downloaded')fail('OUTPUT_MISSING','Recorded video is missing. Recover this original task.');
   return undefined;
 }
-export async function downloadVideo(root: string, job: Job, url: string, duration: number, fetcher: Fetch = fetch, ratio = 'adaptive',
-  commit: (work: () => Promise<void>) => Promise<void> = work => work(), checkpoint?: (point: string) => Promise<void>): Promise<SavedOutput> {
+export async function downloadVideo(root: string, job: DownloadJob, url: string, duration: number, fetcher: Fetch = fetch, ratio = 'adaptive',
+  commit: (work: () => Promise<void>) => Promise<void> = work => work(), checkpoint?: (point: string) => Promise<void>,
+  verifyTemp?: (file:string, output:SavedOutput)=>Promise<void>): Promise<SavedOutput> {
   const existing = await reconcileOutput(root, job); if (existing) return existing;
   let response: Response | undefined, current = publicHttps(url);
   for (let redirects = 0; redirects <= 3; redirects++) {
@@ -166,6 +168,7 @@ export async function downloadVideo(root: string, job: Job, url: string, duratio
       if (Math.abs(metadata.width / metadata.height / (w! / h!) - 1) > 0.03) fail('VIDEO_RATIO', 'Downloaded video aspect ratio differs from the plan.');
     }
     const output = { path: outputPath(job), ...metadata };
+    await verifyTemp?.(temp, output);
     await commit(async () => {
       await writeJson(await projectPath(root, downloadReceipt(job)), { operationId: job.operationId, taskId: job.taskId, requestHash: job.requestHash, output });
       if (await exists(await projectPath(root, outputPath(job)))) fail('OUTPUT_CONFLICT', 'Output appeared during download.');

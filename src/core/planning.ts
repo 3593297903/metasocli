@@ -16,32 +16,38 @@ import { irPersistence, irReviewPath, readIrOperation, readIrPrompt, readIrRevie
 import { operationKind } from '../jobs/submission-guard.js';
 import { assertNoImageStage } from '../images/phase.js';
 
-async function requests(root: string, story: Story, episodeId: string, inlineIr = false) {
-  const episode = story.episodes.find(e => e.id === episodeId);
-  if (!episode) fail('EPISODE_MISSING', 'Episode does not exist.');
+export async function readEpisodeSource(root:string,episode:Story['episodes'][number]) {
   const source = await readStable(await projectPath(root, episode.source.rawPath));
   const normalized = await readStable(await projectPath(root, episode.source.textPath));
   if (sha256Hex(source) !== episode.source.rawHash || sha256Hex(normalized) !== episode.source.textHash || normalizeText(source) !== normalized.toString('utf8')) fail('SOURCE_CHANGED', 'Source snapshot changed; import a new revision.');
   const text = normalized.toString('utf8'); validateCoverage(text, episode.segments);
-  for (const s of episode.segments) {
+  return text;
+}
+async function requests(root: string, story: Story, episodeId: string, inlineIr = false, selected?: readonly string[]) {
+  const episode = story.episodes.find(e => e.id === episodeId);
+  if (!episode) fail('EPISODE_MISSING', 'Episode does not exist.');
+  const text=await readEpisodeSource(root,episode);
+  const segments = selected ? episode.segments.filter(s => selected.includes(s.id)) : episode.segments;
+  if (selected && segments.length !== selected.length) fail('BATCH_SCOPE', 'Selected segments must exist and be unique.');
+  for (const s of segments) {
     const span = text.slice(s.start, s.end);
     if (episode.kind === 'video-prompts' ? s.prompt !== span : !s.prompt.includes(span)) fail('SOURCE_CHANGED', `Prompt ${s.id} lost its source text.`);
   }
   const built = [];
-  for (const segment of episode.segments) {
+  for (const segment of segments) {
     // The immutable plan records this policy; never rewrite historical manifests or plans.
     const effective = inlineIr ? { ...segment, parameters: { ...segment.parameters, contextIr: true } } : segment;
     built.push(await buildRequest(root, story, effective));
   }
   return built;
 }
-export async function createPlan(root: string, episodeId: string, workflow: 'h3-inline-ir' | 'h3-context-ir' = 'h3-inline-ir'): Promise<GenerationPlan> {
+export async function createPlan(root: string, episodeId: string, workflow: 'h3-inline-ir' | 'h3-context-ir' = 'h3-inline-ir', selected?: readonly string[]): Promise<GenerationPlan> {
   parse(Id, episodeId);
   if (workflow !== 'h3-inline-ir' && workflow !== 'h3-context-ir') fail('PLAN_WORKFLOW', 'Unknown workflow.');
   return withProjectLock(root, async () => {
     await assertNoImageStage(root);
     const story = await loadStory(root);
-    const built = await requests(root, story, episodeId, workflow === 'h3-inline-ir');
+    const built = await requests(root, story, episodeId, workflow === 'h3-inline-ir', selected);
     if (workflow === 'h3-context-ir') for (const base of built) buildIrRequest(base.request);
     const base = { schemaVersion: 1 as const, planId: randomUUID(), projectId: story.projectId, episodeId, revision: story.revision,
       manifestHash: canonicalSha256(story), createdAt: new Date().toISOString(), segments: built.map(b => b.summary),
@@ -86,7 +92,7 @@ export async function validatePlan(root: string, plan: GenerationPlan): Promise<
   }
   const story = await loadStory(root);
   if (story.projectId !== plan.projectId || story.revision !== plan.revision || canonicalSha256(story) !== plan.manifestHash) fail('PLAN_STALE', 'Story or assets changed; create a fresh plan before any new submission.');
-  const built = await requests(root, story, plan.episodeId, plan.workflow?.stage === 'inline-video');
+  const built = await requests(root, story, plan.episodeId, plan.workflow?.stage === 'inline-video', plan.segments.map(s => s.segmentId));
   if (plan.workflow?.stage === 'prepare') for (const base of built) buildIrRequest(base.request);
   if (canonicalSha256(built.map(b => b.summary)) !== canonicalSha256(plan.segments)) fail('PLAN_STALE', 'Request content differs from the immutable plan.');
   return { story, built };

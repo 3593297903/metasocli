@@ -1,8 +1,8 @@
 # metasocli
 
-当前版本为 `0.2.0`，恢复标签为 `v0.2.0`。恢复时使用该标签或其完整 Git 提交号。[0.2.0 版本记录](docs/VERSION_0.2.0.md)；[R3 视频容量与恢复修复版本记录](docs/VERSION_SNAPSHOT_20261109_CAPACITY_R3.md)；[上一版一次视频流程记录](docs/VERSION_SNAPSHOT_20261107_VIDEO_RUN.md)；[一次换提示词记录](docs/VERSION_SNAPSHOT_20261107_PROMPT_REPLACEMENT.md)；[同 ID 换图记录](docs/VERSION_SNAPSHOT_20261107_IMAGE_REPLACEMENT.md)。
+当前版本为 `0.2.1`，对应 Git 标签 `v0.2.1`。可以用标签或完整提交号定位源码。[0.2.1 版本记录](docs/VERSION_0.2.1.md) · [0.2.0 版本记录](docs/VERSION_0.2.0.md) · [R3 视频容量与恢复](docs/VERSION_SNAPSHOT_20261109_CAPACITY_R3.md) · [一次视频流程](docs/VERSION_SNAPSHOT_20261107_VIDEO_RUN.md) · [一次换提示词](docs/VERSION_SNAPSHOT_20261107_PROMPT_REPLACEMENT.md) · [同 ID 换图](docs/VERSION_SNAPSHOT_20261107_IMAGE_REPLACEMENT.md)
 
-独立的 Node.js / TypeScript CLI，将完整剧本或成品视频提示词整理为 Metaso `MiniMax-H3` 请求计划，并管理提交、查询、恢复及视频下载。当前版本 **0.2.0**。2026-09-21 起默认视频请求明确启用 `context_ir_enabled:true`；本次切换只做离线验证，没有发起付费生成。
+独立的 Node.js / TypeScript CLI，支持从完整剧本或成品视频提示词准备素材，通过 Metaso `MiniMax-H3` 或创艺坊 Seedance 2.5 提交、查询、恢复和下载视频。Metaso H3 请求自 2026-09-21 起默认启用 `context_ir_enabled:true`。[创艺坊准备与视频入口](docs/SEEDANCE_SKILL.md)
 
 当前源码包含视频四并发持续补位、独立下载，以及 Windows 路径大小写和已完成项目归档的恢复修复。详见 [批次实施报告](docs/VIDEO_BATCH_CONCURRENCY_IMPLEMENTATION_REPORT.md) 与 [独立复核](docs/VIDEO_BATCH_CONCURRENCY_RECHECK.md)。
 
@@ -261,3 +261,32 @@ node scripts/video-capacity-benchmark.mjs <保留的基线源码及dist目录> 3
 ```
 
 这些命令使用隔离夹具和假客户端；不证明真实供应商容量、网络或收费生成已验收。
+## 创艺坊 Seedance 2.5 视频
+
+在独立故事对话中输入 `$yiciyuang2.5cli 按这份剧本准备第1到3集`。这个入口保留剧本原文、图片配方和分镜图序，每段准备 5–30 秒、最多 30 图、10 音频、10 参考视频。运行 `seedance checklist --root <故事> --episode <集ID>` 可查看逐段的目标和实际秒数、素材顺序、文件哈希和缺项。
+
+想生成时手打 `$ycy480sd2.5 生成第2集第3、5段` 或 `$ycy720sd2.5 生成第3集`。也可以先发型号，再在同一故事对话中指定生成范围。安装及使用见 [Skill 执行约定](docs/SEEDANCE_SKILL.md)。
+
+以下是在安装根运行的 CLI 示例。省略 `--confirm` 只生成本地计划或核对已有结果。
+
+```powershell
+node dist/cli/main.js video run --root D:\stories\demo --episodes ep-3,ep-4 --model seedance-2.5-face-full-5s-720p
+node dist/cli/main.js video run --root D:\stories\demo --selection D:\stories\selected.json --model seedance-2.5-face-full-5s-480p
+node dist/cli/main.js video run --root D:\stories\demo --batch <已授权的批次ID> --confirm
+node dist/cli/main.js resume --root D:\stories\demo --operation <仅需收片的操作ID>
+```
+
+既有故事的图、首帧和旁白绑定可直接使用。为 16–30 秒或新增素材的分镜在导入稿该段加入 `seedance`，使用原有 `duration` 记录目标秒数。小数向上取整，实际生成时长须为 5–30 秒。一个新增绑定的例子如下，sha256 需替换为该文件的实际字节哈希。
+
+```json
+{"seedance":{"ratio":"9:16","requireAudio":true,"assets":[
+  {"role":"reference_audio","path":"assets/voice.wav","sha256":"<64位SHA-256>","mime":"audio/wav"},
+  {"role":"reference_video","path":"assets/motion.mp4","sha256":"<64位SHA-256>","mime":"video/mp4"}
+]}}
+```
+
+素材路径相对于故事根，使用正斜杠。普通参考图使用 `reference_image`，可接 JPG/PNG。项目登记图片按分镜绑定顺序在前，额外绑定图片在后。提示词使用 `{{ref:资产ID}}` 或显式 `@图1`。旧式独立图序行如“素材绑定：参考图1、参考图2”会转换，人物台词里的“参考图1”保留原文。首尾帧用 `first_frame` 和 `last_frame`，尾帧需要首帧。可选的 `url` 用于已核对的公网 HTTPS 素材，各绑定仍保留本机文件和哈希。全部素材具备 URL 时发送 JSON，包含本地文件的请求使用 multipart 直传。音频可用 WAV/MP3，参考视频可用 MP4。发布前使用 FFmpeg 解码视频，要求有声的段同时验证音轨。
+
+视频凭据优先取 `METASOCLI_YICIYUANG_VIDEO_API_KEY`，否则复用本机创艺坊凭据。查询和下载使用原任务的 Key。默认 1 个生成名额，同一安装下两个型号共用额度；核实账户配额后可为新计划设置 `--concurrency 2`。正常每 10 秒查询。受理满 40 分钟仍在途时显示状态，继续按原 ID 查询。成片通过校验后存入故事的 `outputs/<集ID>/<段ID>-<操作ID>.mp4`。
+
+单段 `status --operation` 查看回执，`resume --operation` 或 `download --operation` 恢复原任务。未知创建可在找回原任务号后使用 `attach-task --operation <操作ID> --task <原任务号> --confirm-task-link`。用户明确授权该段一次新的付费尝试时，使用 `video run --batch <批次ID> --retry-of <操作ID> --accept-unknown-result --confirm`；原单明确失败时省略 `--accept-unknown-result`。重复同一重试命令沿用同一后继操作。所有故事命令必须带 `--root`。

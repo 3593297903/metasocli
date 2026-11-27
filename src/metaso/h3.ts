@@ -55,6 +55,7 @@ export function validateRequest(value: unknown): H3Request {
   return request;
 }
 export async function buildRequest(root: string, story: Story, segment: StorySegment) {
+  if(segment.seedance?.assets.length)fail('H3_CONTENT','This segment binds Seedance media. Select its explicit video model.');
   const rendered = renderPrompt(segment);
   const content: H3Request['content'] = [{ type: 'text', text: rendered.text }];
   const assets: GenerationPlan['segments'][number]['assets'] = [];

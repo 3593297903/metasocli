@@ -43,8 +43,8 @@ try {
   $skillFiles = @($pack.files.path | Where-Object { $_ -match '^skills/[^/]+/SKILL.md$' })
   # Keep the isolated Windows PowerShell 5.1 run independent of the source-file code page.
   $narrationSkill = 'metasocli-video-prompts-' + [string][char]0x65C1 + [string][char]0x767D
-  $expectedSkills = @('metasocli','metasocli-video-prompts',$narrationSkill,'metasocli-prompt-engine','metasocli-reference-images','metasoclitk')
-  if ($skillFiles.Count -ne $expectedSkills.Count) { throw 'Expected exactly six independent bundled Skills' }
+  $expectedSkills = @('metasocli','metasocli-video-prompts',$narrationSkill,'metasocli-prompt-engine','metasocli-reference-images','metasoclitk','ycy480sd2','ycy720sd2','yiciyuang2')
+  if ($skillFiles.Count -ne $expectedSkills.Count) { throw 'Bundled Skill count differs from the expected entries' }
   foreach ($skill in $expectedSkills) {
     if ($pack.files.path -notcontains "skills/$skill/SKILL.md") { throw "Missing bundled Skill: $skill" }
   }

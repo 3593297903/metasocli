@@ -1,0 +1,5 @@
+interface:
+  display_name: "ycy480sd2.5"
+  short_description: "在当前故事中选择创艺坊 Seedance 2.5 480p 并按指定集段生成视频"
+policy:
+  allow_implicit_invocation: false

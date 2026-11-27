@@ -25,6 +25,9 @@ import { createBatchPlan, batchStatus, loadBatch, loadBatchRun } from '../jobs/b
 import { runBatch, authorizeBatchRetry } from '../jobs/batch.js';
 import { executeVideo, type VideoWorkflowDependencies } from '../jobs/video-workflow.js';
 import { runVideo } from '../jobs/video-run.js';
+import { attachSeedTask, runSeedance } from '../seedance/run.js';
+import { seedChecklist } from '../seedance/checklist.js';
+import { hasSeedPlan, seedOperation } from '../seedance/store.js';
 import { listVideoRetries, retryProgress } from '../jobs/video-retry.js';
 import { reconcileRuntime, occupied, inspectRuntime, capacitySnapshot } from '../jobs/coordinator.js';
 import { createImagePlan, loadImageProfile } from '../images/planning.js';
@@ -35,7 +38,9 @@ import { readImageJob } from '../images/store.js';
 import { prepareImages } from '../images/preparation.js';
 import { collectImages, imageSummary, imageBlockerCategory } from '../images/reporting.js';
 
-export const HELP = `metasocli 0.2.0 — independent Metaso MiniMax-H3 CLI
+const VERSION = '0.2.1';
+
+export const HELP = `metasocli ${VERSION} — independent Metaso MiniMax-H3 and Seedance 2.5 CLI
 All story commands require --root <dedicated-story-directory>.
 
 auth status
@@ -62,6 +67,7 @@ prompts replace --root <path> --episode <existing-id> --segment <existing-id> --
                 [--expected-sha256 <raw-file-hash>] [--expected-prompt-hash <old-normalized-hash>] [--narration-cues <json>]
   One local text replacement; no generation, credential loading, media scan or shared ledger access.
 assets list     --root <path>
+seedance checklist --root <path> --episode <id>   Check ordered assets and duration locally before choosing a resolution.
 assets register --root <path> --id <asset-id> (--file <image-or-narration-audio>|--url <public-https-url>) [--provenance user|imagegen]
                 [--expected-sha256 <selected-reference-hash>]
 plan       --root <path> --episode <id> [--workflow h3-inline-ir|h3-context-ir]
@@ -80,7 +86,11 @@ batch retry --root <path> --batch <id> --operation <local-operation-id> --confir
 batch status --root <path> --batch <id>
   batch run/resume/retry: [--capacity-wait-ms <0..300000>] [--capacity-poll-ms <10..60000>] (30000 / 250 defaults)
 batch register --root <path>  Register known existing tasks in the shared installation capacity ledger.
-video run --root <path> (--batch <id>|--selection <json>|--episodes <ordered,ids>) [--confirm] [--verify-av]
+video run --root <path> (--batch <id>|--selection <json>|--episodes <ordered,ids>) [--model <Seedance model ID>] [--confirm] [--verify-av]
+  Seedance: seedance-2.5-face-full-5s-480p or seedance-2.5-face-full-5s-720p. Resume one receipt with resume --operation.
+  Both Seedance models share one generation slot by default. New plans accept --concurrency 1 or 2.
+  Set METASOCLI_YICIYUANG_VIDEO_API_KEY or use the configured Yiciyuang image credential.
+  --batch --confirm continues an authorized scope. To authorize a preview, supply its --expect-scope hash and --confirm.
   One invocation: local prepare, checked scope handoff, existing execution and delivery. Without confirm: local only.
 video execute --root <path> (--batch <id>|--selection <json>|--episodes <ordered,ids>) [--verify-av]
   Without --confirm: local preparation/status/delivery only. Prefer --batch <id> --confirm to execute.
@@ -92,7 +102,7 @@ download   --root <path> --operation <id> [--redownload-missing]
 attach-task --root <path> --operation <id> --task <provider-id> --confirm-task-link
 doctor     --root <path>
 
-New plans default to h3-inline-ir: every video POST sends context_ir_enabled=true.
+New H3 plans default to h3-inline-ir. H3 video requests send context_ir_enabled=true.
 generate requires authorization for video generation including inline IR; planning is offline.
 Legacy independent IR commands remain available for text tasks and recovery. IR never automatically creates video.
 generate refuses false-IR plans: replan the original episode with h3-inline-ir. Use resume for existing tasks.
@@ -101,14 +111,14 @@ batch resume may create the remaining items of its saved, authorized scope. Rece
 images resume may POST unstarted items ONLY within its saved image authorization. images recover never creates.
 Image all-ready starts every ready request independently (n=1); no generation-slot pool or automatic POST retries.
 Images use METASOCLI_IMAGE_API_KEY / independent encrypted credentials. Real provider capacity remains unverified.
-Video slots are shared (max 4); downloads run separately (max 2). Each story has its own batch/image scheduler.
+H3 video slots are shared (max 4). Downloads run separately (max 2). Each story has its own batch/image scheduler.
 R3 releases ended unknowns, actual query failures and unavailable sources locally, preserving original tasks.
 Fresh active evidence restores capacity; remote work may exceed four after an uncertain release. Cold-switch old writers.
 An explicit unknown retry can incur duplicate billing: the original unknown and its capacity audit remain preserved.
 Repeated retry of the same local operation reuses one stable new attempt; no old remote task ID is required.
 waiting_capacity means authorization saved, not sent. Batch retry prioritizes it as known tasks finish.
 Use --runtime-dir <isolated-directory> or METASO_RUNTIME_DIR for development/tests; production defaults to ~/.metasocli-runtime.
-init/import/plan/status/doctor work without an API key. Remote operations use METASO_API_KEY or this installation's encrypted credential.
+init/import/plan/status/doctor work without an API key. Remote H3 operations use METASO_API_KEY or this installation's encrypted credential.
 JSON output is the default. --json is accepted. No global setup or old installation is touched.
 `;
 type Value = string | boolean | undefined;
@@ -129,7 +139,7 @@ function durationNumber(values: Record<string, Value>): number {
   return target;
 }
 const flags: Record<string, { strings?: string[]; booleans?: string[] }> = {
-  'auth status': {},
+  'auth status': {}, 'seedance checklist': {strings:['episode']},
   init: { strings: ['name'] }, import: { strings: ['draft', 'file', 'kind', 'episode', 'duration'], booleans: ['replace'] },
   'assets list': {}, 'assets register': { strings: ['id', 'file', 'url', 'provenance', 'expected-sha256'] },
   'prompts replace': { strings: ['episode', 'segment', 'file', 'expected-sha256', 'expected-prompt-hash', 'narration-cues'] },
@@ -144,7 +154,7 @@ const flags: Record<string, { strings?: string[]; booleans?: string[] }> = {
   'batch retry': { strings: ['batch', 'operation', 'max-polls', 'poll-ms', 'scheduler-wait-ms', 'capacity-wait-ms', 'capacity-poll-ms'], booleans: ['confirm', 'accept-unknown-result'] },
   'batch status': { strings: ['batch'] }, 'batch register': {},
   'video execute': { strings:['batch','selection','episodes','concurrency','expect-scope','max-polls','poll-ms','scheduler-wait-ms','capacity-wait-ms','capacity-poll-ms'], booleans:['confirm','verify-av'] },
-  'video run': { strings:['batch','selection','episodes','concurrency','expect-scope','max-polls','poll-ms','scheduler-wait-ms','capacity-wait-ms','capacity-poll-ms'], booleans:['confirm','verify-av'] },
+  'video run': { strings:['model','batch','selection','episodes','concurrency','expect-scope','max-polls','poll-ms','scheduler-wait-ms','capacity-wait-ms','capacity-poll-ms','retry-of'], booleans:['confirm','verify-av','accept-unknown-result'] },
   'images auth-status': {},
   'images prepare': { strings:['batch','preparation','python'] },
   'images collect': { strings:['preparation','python'] },
@@ -172,8 +182,8 @@ export interface CliResult { exitCode: number; data: unknown }
 export async function runCli(args: string[], injected?: VideoWorkflowDependencies & { irClient?: ContextIrClient; irPersistence?: IrPersistence }, imageInjected?: ImageDependencies): Promise<CliResult> {
   try {
     if (!args.length || args.includes('--help') || args[0] === 'help') return { exitCode: 0, data: HELP };
-    if (args[0] === '--version') return { exitCode: 0, data: '0.2.0' };
-    const count = ['assets', 'auth', 'batch', 'images', 'video', 'prompts'].includes(args[0] ?? '') ? 2 : 1, command = args.slice(0, count).join(' '), spec = flags[command];
+    if (args[0] === '--version') return { exitCode: 0, data: VERSION };
+    const count = ['assets', 'auth', 'batch', 'images', 'video', 'prompts','seedance'].includes(args[0] ?? '') ? 2 : 1, command = args.slice(0, count).join(' '), spec = flags[command];
     if (!spec) fail('CLI_ARGUMENT', 'Unknown command. Run --help.');
     const options: Record<string, { type: 'string' | 'boolean' }> = { root: { type: 'string' }, json: { type: 'boolean' } };
     if (command !== 'prompts replace') options['runtime-dir'] = { type: 'string' };
@@ -192,6 +202,10 @@ export async function runCli(args: string[], injected?: VideoWorkflowDependencie
     if (command === 'auth status') return { exitCode: 0, data: { ...(await credentialStatus()), provider: 'Metaso', model: 'MiniMax-H3', liveCheckPerformed: false } };
     if (command === 'images auth-status') return {exitCode:0,data:{...await imageCredentialStatus(),provider:'yiciyuang',requestedModel:'gpt-image-2.5',liveCheckPerformed:false}};
     const root = resolve(required(v, 'root'));
+    if(command==='seedance checklist') {
+      const data=await seedChecklist(root,required(v,'episode'));
+      return {exitCode:data.segments.some(s=>s.issues.length)?2:0,data};
+    }
     // Local workflow branches precede even construction of the lazy network/credential adapter.
     if (command === 'prompts replace') return { exitCode: 0, data: await replaceSegmentPrompt(root, {
       episodeId: required(v, 'episode'), segmentId: required(v, 'segment'), file: required(v, 'file'),
@@ -239,14 +253,21 @@ export async function runCli(args: string[], injected?: VideoWorkflowDependencie
     };
     if (command === 'init') return { exitCode: 0, data: await initializeStory(root, typeof v.name === 'string' ? v.name : basename(root)) };
     if (command === 'video execute' || command === 'video run') {
-      return await (command === 'video run' ? runVideo : executeVideo)(root,{
+      const input={
         ...(v.batch===undefined?{}:{batch:required(v,'batch')}),
         ...(v.selection===undefined?{}:{selection:await readJson(resolve(required(v,'selection')))}),
         ...(v.episodes===undefined?{}:{episodes:required(v,'episodes').split(',').map(s=>s.trim())}),
         concurrency:number(v,'concurrency'),expectScope:v['expect-scope'] as string|undefined,
         confirm:v.confirm===true,verifyAv:v['verify-av']===true,
         options:{...pollOptions(v),...capacityOptions(v),schedulerWaitMs:number(v,'scheduler-wait-ms')}
-      }, await deps());
+      };
+      if(command==='video run' && (v.model!==undefined || (input.batch && await hasSeedPlan(root,input.batch)))) {
+        if(v['accept-unknown-result']&&!v['retry-of'])fail('CLI_ARGUMENT','An unknown retry must name its original operation.');
+        return await runSeedance(root,{...input,model:v.model as string|undefined,runtime:v['runtime-dir'] as string|undefined,...pollOptions(v),...capacityOptions(v),
+          retryOf:v['retry-of'] as string|undefined,acceptUnknown:v['accept-unknown-result']===true});
+      }
+      if(v['retry-of']||v['accept-unknown-result'])fail('CLI_ARGUMENT','Use the original H3 retry command for a Metaso operation.');
+      return await (command === 'video run' ? runVideo : executeVideo)(root,input, await deps());
     }
     if (command === 'batch plan') return { exitCode: 0, data: await createBatchPlan(root, {
       ...(v.episodes !== undefined ? { episodes: required(v, 'episodes').split(',').map(id => id.trim()) } : {}),
@@ -308,6 +329,15 @@ export async function runCli(args: string[], injected?: VideoWorkflowDependencie
       if (!v['submit-only'] && ['queued', 'running', 'query_unknown', 'enhanced'].includes(operation.status)) operation = await resumeContextIr(root, operation.operationId, dependencies, polling);
       return { exitCode: jobExit(operation), data: operation };
     }
+    if (['status','resume','download','attach-task'].includes(command) && typeof v.operation==='string'){
+      const job=await seedOperation(root,v.operation);
+      if(job){
+        if(command==='attach-task')return {exitCode:0,data:await attachSeedTask(root,job,required(v,'task'),v['confirm-task-link']===true,v['runtime-dir'] as string|undefined)};
+        if(command==='status'&&!v.remote)return {exitCode:0,data:job};
+        return await runSeedance(root,{batch:job.planId,operation:job.operationId,confirm:true,verifyAv:false,
+          runtime:v['runtime-dir'] as string|undefined,...pollOptions(v),...(['status','download'].includes(command)?{maxPolls:1}:{}),observeOnly:command==='status'});
+      }
+    }
     if (command === 'status' && v.remote) {
       const operationId = required(v, 'operation');
       const job = await operationKind(root, operationId) === 'ir'
@@ -322,7 +352,7 @@ export async function runCli(args: string[], injected?: VideoWorkflowDependencie
       const contextIrOperations = selected ? (kind === 'ir' ? [await readIrOperation(root, selected)] : []) : await listIrOperations(root);
       if (contextIrOperations.some(ir => jobs.some(job => job.operationId === ir.operationId))) fail('OPERATION_CONFLICT', 'Operation ID exists in both namespaces.');
       const videoRetries = await Promise.all((await listVideoRetries(root)).map(a => retryProgress(root, a)));
-      return { exitCode: 0, data: { version: '0.2.0', projectId: story.projectId, revision: story.revision, episodes: story.episodes.map(e => e.id), assets, jobs, contextIrOperations, videoRetries,
+      return { exitCode: 0, data: { version: VERSION, projectId: story.projectId, revision: story.revision, episodes: story.episodes.map(e => e.id), assets, jobs, contextIrOperations, videoRetries,
         capacity:capacitySnapshot(root,await inspectRuntime(v['runtime-dir'] as string|undefined??injected?.runtimeRoot)),
         ...(command === 'doctor' ? { node: process.version, credentials: await credentialStatus(), missingAssets: assets.filter(a => a.status !== 'ready').map(a => a.assetId), nativeApiVerifiedLive: false } : {}) } };
     }

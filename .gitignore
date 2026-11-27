@@ -16,6 +16,7 @@ secrets*.json
 *.log
 .local/
 .handoff/
+/metasocli-context-*/
 projects/
 workspaces/
 downloads/

@@ -228,7 +228,7 @@ export async function freezeBatchPlan(root: string, input: { episodes?: string[]
   const selection = batchSelection(story, input);
   const items: VideoBatchPlan['items'] = [];
   for (const row of selection) {
-    const plan = await createPlan(root, row.episodeId, 'h3-inline-ir');
+    const plan = await createPlan(root, row.episodeId, 'h3-inline-ir', row.segmentIds);
     for (const segmentId of row.segmentIds) {
       const s = plan.segments.find(s => s.segmentId === segmentId)!;
       items.push({ order: items.length, projectId: story.projectId, episodeId: row.episodeId, segmentId, planId: plan.planId, planHash: plan.planHash, requestHash: s.requestHash, inputHash: s.inputHash });

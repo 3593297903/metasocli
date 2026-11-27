@@ -258,8 +258,15 @@ def validate_import_draft(raw: Any, request: dict[str, Any], recipe: dict[str, A
             raise ValidationError("draft contains duplicate segment IDs")
         segment_ids.add(segment_id)
         references = segment.get("references", [])
-        if not isinstance(references, list) or len(references) > 9:
-            raise ValidationError("draft references must be an array of at most nine images")
+        seedance = segment.get("seedance")
+        if "seedance" in segment and (not isinstance(seedance, dict) or
+                set(seedance) - {"assets", "requireAudio", "ratio"} or not isinstance(seedance.get("assets", []), list)):
+            raise ValidationError(f"{request['episodeId']}/{segment_id}: invalid seedance settings")
+        limit = 30 if seedance is not None else 9
+        if not isinstance(references, list):
+            raise ValidationError(f"{request['episodeId']}/{segment_id}: references must be an array")
+        if len(references) > limit:
+            raise ValidationError(f"{request['episodeId']}/{segment_id}: {len(references)} image references, maximum {limit}")
         seen: set[str] = set()
         for raw_reference in references:
             reference = require_object(raw_reference, "draft image reference")

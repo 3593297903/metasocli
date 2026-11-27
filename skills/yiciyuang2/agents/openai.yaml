@@ -1,0 +1,5 @@
+interface:
+  display_name: "yiciyuang2.5cli"
+  short_description: "按创艺坊 Seedance 2.5 容量准备剧本、分镜和参考素材清单"
+policy:
+  allow_implicit_invocation: false

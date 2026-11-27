@@ -1,5 +1,7 @@
 # 在 Codex 新项目中开始
 
+使用创艺坊 Seedance 2.5 时，由 `$yiciyuang2.5cli` 准备分镜和参考素材，再用 `$ycy480sd2.5` 或 `$ycy720sd2.5` 点名生成指定集段。[安装和使用说明](docs/SEEDANCE_SKILL.md)
+
 第一版 0.1.0 已实现，离线使用与命令见 [README](README.md)，验收记录见 [docs/VERIFICATION.md](docs/VERIFICATION.md)。下面保留最初的开发交接说明，后续任务应先检查当前实现与测试，不必重复初始化。
 
 直接制作视频时，在 `E:\metasocli` 的本地任务中使用 `$metasocli-video-prompts`（成品提示词）或 `$metasocli`（剧本），附上输入并指定故事目录与生成范围。需要沿用已配置的统一旁白声线时，使用独立的 `$metasocli-video-prompts-旁白`。项目技能由 `.agents/skills/` 加载；详细示例见 [README 的 Skill 用法](README.md#在-codex-中使用-skill)。

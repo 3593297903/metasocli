@@ -12,6 +12,7 @@ import { acquireLease, withProjectWrite } from '../storage/locking.js';
 import { listJobs } from '../jobs/store.js';
 import { runtimeDirectory } from '../jobs/coordinator.js';
 import { buildRequest } from '../metaso/h3.js';
+import { prepareInputs, verifiedFiles } from '../seedance/request.js';
 import type { Fetch } from '../metaso/transport.js';
 import { type ImageClient } from './client.js';
 import { resolvedImage, type ImagePlanRecord, type ImageJobRecord, type ImageRunRecord } from './contracts.js';
@@ -248,7 +249,17 @@ export async function runImages(root:string,id:string,authorize:boolean,deps:Ima
 export async function checkImageVideoInputs(root:string,plan:ImagePlanRecord){
   return withProjectWrite(root,async()=>{const story=await validateImagePlan(root,plan),segments=[];
     for(const binding of plan.scope){const segment=story.episodes.find(e=>e.id===binding.episodeId)!.segments.find(s=>s.id===binding.segmentId)!;
-      try{const built=await buildRequest(root,story,{...segment,parameters:{...segment.parameters,contextIr:true}});segments.push({...binding,ok:true,requestBytes:built.summary.requestBytes,requestHash:built.summary.requestHash,assets:built.summary.assets});}
+      try{
+        if(segment.seedance){
+          const inputs=prepareInputs(story,segment);
+          await verifiedFiles(root,inputs);
+          segments.push({...binding,ok:true,provider:'yiciyuang',duration:inputs.duration,promptHash:inputs.promptHash,
+            assets:inputs.assets.map(({role,path,mime,sha256})=>({role,path,mime,sha256}))});
+        }else{
+          const built=await buildRequest(root,story,{...segment,parameters:{...segment.parameters,contextIr:true}});
+          segments.push({...binding,ok:true,requestBytes:built.summary.requestBytes,requestHash:built.summary.requestHash,assets:built.summary.assets});
+        }
+      }
       catch(error){segments.push({...binding,ok:false,assetIds:segment.references.map(r=>r.assetId),narration:segment.narration?.assetId,error:publicError(error)});}
     }
     const result={planId:plan.planId,planHash:plan.planHash,revision:story.revision,checkedAt:now(),ok:segments.every(s=>s.ok),segments};

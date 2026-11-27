@@ -66,7 +66,7 @@ CLI 自动保存完整回执、下载原文件、检查格式/大小并按条件
 
 `images resume` 可继续原授权内尚未提交项；`images recover` 仅恢复已有结果。同步 HTTP 断线且无完整回执是未知，不可凭本地 operationId 查询供应商或重 POST；按实际用法执行明确的人工关联/证据解除/新尝试授权。不得自动退回 built_in、换模型、重画 ready 图或清空账本。旁白不进入图片计划或 edits 文件。
 
-全部必要图 ready 后核对 `<planId>-video-check.json`，排除 H3 九图/64 MiB/旁白组合冲突；返回原入口重新创建 H3 inline 视频计划/四并发批次，仍服从独立的视频生成授权。旧视频 task_id 可继续查询下载。
+全部必要图 ready 后核对 `<planId>-video-check.json`。从 `$yiciyuang2.5cli` 进入的分镜按 Seedance 容量检查，返回该准备入口运行逐集清单，等用户选型号和生成范围。H3 分镜继续核对九图、64 MiB 和旁白组合，再回原入口创建 H3 inline 计划。旧视频 task_id 可继续查询下载。
 
 ## 第二阶段：built_in 原样生图与登记
 

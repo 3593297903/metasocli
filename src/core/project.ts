@@ -58,7 +58,9 @@ export function normalizeImportDraft(value: unknown, raw: Buffer) {
     id: draft.episodeId, kind: draft.kind,
     source: { origin: basename(draft.source), rawPath: `.metasocli/sources/${rawHash}.bin`, rawHash, textPath: `.metasocli/sources/${textHash}.txt`, textHash },
     segments: draft.segments.map(s => {
-      const normalizedDuration = normalizeTargetDurationSeconds(s.duration, `Segment ${s.id} duration`);
+      const normalizedDuration = s.seedance
+        ? {duration: Math.ceil(s.duration), targetDurationSeconds: Number.isInteger(s.duration) ? undefined : s.duration}
+        : normalizeTargetDurationSeconds(s.duration, `Segment ${s.id} duration`);
       const original = text.slice(s.start, s.end);
       const prompt = s.prompt === undefined ? original : normalizeText(s.prompt);
       if (draft.kind === 'video-prompts' && prompt !== original) fail('PROMPT_CHANGED', `Finished prompt ${s.id} must match its complete source span.`);

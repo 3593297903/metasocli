@@ -1,14 +1,14 @@
 {
   "name": "metasocli",
-  "version": "0.2.0",
-  "description": "Independent local story and Metaso H3 video task CLI",
+  "version": "0.2.1",
+  "description": "Local story and video task CLI for Metaso H3 and Seedance 2.5",
   "type": "module",
   "private": true,
   "license": "UNLICENSED",
   "engines": { "node": ">=24.0.0" },
   "bin": { "metasocli": "dist/cli/main.js" },
   "exports": { ".": "./dist/core/index.js" },
-  "files": ["dist/", "skills/", "README.md", "docs/", "examples/", "scripts/connect-image-local.mjs"],
+  "files": ["dist/", "skills/", "README.md", "docs/", "examples/", "scripts/connect-image-local.mjs", "scripts/seedance-skill.mjs", "scripts/install-seedance-skills.mjs", "scripts/seedance-codex-skills.mjs"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --pool=threads",
