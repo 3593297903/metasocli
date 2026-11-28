@@ -2,12 +2,14 @@ import { z } from 'zod';
 import { Hash, Id, RelativePath } from '../contracts/story.js';
 
 export const IMAGE_ORIGIN = 'https://api.yiciyuang.com';
+export const DEFAULT_IMAGE_MODEL = 'gpt-image-2.6-sunburst';
+export const ImageModel = z.enum([DEFAULT_IMAGE_MODEL, 'gpt-image-2.5']);
 export const IMAGE_GENERATION_TIMEOUT_MS = 600000;
 export const MAX_IMAGE_GENERATION_TIMEOUT_MS = 1200000;
-export const Size = z.enum(['1024x1024', '1536x1024', '1024x1536', '1920x1088', '1088x1920', '2048x2048', '2560x1440', '2560x1707', '1707x2560', '4096x4096']);
+export const Size = z.enum(['1024x1024', '1536x1024', '1024x1536', '1536x2048', '1920x1088', '1088x1920', '2048x2048', '2560x1440', '2560x1707', '1707x2560', '4096x4096']);
 export const ImageProfile = z.object({
   backend: z.literal('api').default('api'), provider: z.literal('yiciyuang').default('yiciyuang'),
-  origin: z.literal(IMAGE_ORIGIN).default(IMAGE_ORIGIN), model: z.literal('gpt-image-2.5').default('gpt-image-2.5'),
+  origin: z.literal(IMAGE_ORIGIN).default(IMAGE_ORIGIN), model: ImageModel.default(DEFAULT_IMAGE_MODEL),
   quality: z.enum(['auto','low','medium','high']).default('medium'), n: z.literal(1).default(1),
   response_format: z.enum(['url','b64_json']).default('url'), submissionMode: z.literal('all-ready').default('all-ready'),
   boardSize: Size.default('1920x1088'), firstFrameSize: Size.default('1088x1920'), sizes: z.record(Id, Size).default({}),
@@ -36,7 +38,7 @@ export const ImagePlan = z.object({ schemaVersion: z.literal(1), planId: z.uuid(
 export type ImagePlanRecord = z.infer<typeof ImagePlan>;
 export type ImagePlanItem = z.infer<typeof ImageItem>;
 export const ImageInput = z.object({ provider: z.literal('yiciyuang'), origin: z.literal(IMAGE_ORIGIN),
-  route: z.enum(['/v1/images/generations','/v1/images/edits']), model: z.literal('gpt-image-2.5'), quality: ImageProfile.shape.quality,
+  route: z.enum(['/v1/images/generations','/v1/images/edits']), model: ImageModel, quality: ImageProfile.shape.quality,
   size: Size, n: z.literal(1), response_format: ImageProfile.shape.response_format, promptPath: RelativePath, promptHash: Hash,
   references: z.array(z.object({ assetId: Id, sha256: Hash, path: RelativePath, mime: z.enum(['image/png','image/jpeg','image/webp']) }).strict()),
 }).strict();
@@ -54,7 +56,7 @@ export type ImageJobRecord = z.infer<typeof ImageJob>;
 export const BodyReceipt = z.object({ schemaVersion:z.literal(1), operationId:z.uuid(), requestHash:Hash, path:RelativePath, sha256:Hash,
   bytes:z.number().int().nonnegative(), httpStatus:z.number().int(), headers:z.record(z.string(),z.string()), responseHeadersAt:z.iso.datetime(), responseSavedAt:z.iso.datetime(), hash:Hash }).strict();
 export const ImageReceipt = z.object({ operationId:z.uuid(), requestHash:Hash, bodyHash:Hash, receiptSavedAt:z.iso.datetime(),
-  url:z.string().optional(), result:ImageJob.shape.result.optional(), requestedModel:z.literal('gpt-image-2.5'), reportedModel:z.string().optional(),
+  url:z.string().optional(), result:ImageJob.shape.result.optional(), requestedModel:ImageModel, reportedModel:z.string().optional(),
   revisedPromptPath:RelativePath.optional(), usage:z.unknown().optional(), recoveredManually:z.boolean().optional() }).strict();
 export const ImageRun = z.object({ schemaVersion:z.literal(1), planId:z.uuid(), planHash:Hash, hash:Hash,
   authorization:z.object({planHash:Hash,provider:z.literal('yiciyuang'),quotaGroup:Id,maxRequests:z.number().int(),authorizedAt:z.iso.datetime(),acceptedUnknown:z.array(z.object({operationId:z.uuid(),requestHash:Hash}).strict()).optional(),acceptedExistingUnknown:z.array(z.object({root:z.string(),projectId:z.uuid(),planId:z.uuid(),operationId:z.uuid(),assetId:Id,fingerprint:Hash,requestHash:Hash}).strict()).max(1000).optional()}).strict(),

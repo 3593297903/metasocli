@@ -22,6 +22,7 @@ CONTROL_CHARACTER = re.compile(r"[\x00-\x1f\x7f]")
 KINDS = {"character", "scene", "prop", "first_frame"}
 STATUSES = {"generated", "reused", "skipped_optional", "blocked", "failed"}
 MODES = {"built_in", "not_run", "api"}
+IMAGE_MODELS = ("gpt-image-2.6-sunburst", "gpt-image-2.5")
 PLACEHOLDERS = ("同上", "见前文", "见上文", "沿用前面", "待补充", "tbd", "todo")
 
 REQUEST_TOP_KEYS = {"schemaVersion", "episodeId", "modelPreference", "requireExactModel", "assets"}
@@ -483,7 +484,7 @@ def validate_api_execution(item: dict[str, Any], root: Path | None) -> None:
     execution = require_object(load_json(file), "execution")
     if execution.get("provider") != "yiciyuang" or execution.get("operationId") != op or execution.get("assetId") != item["assetId"]:
         raise ValidationError("API execution identity mismatch")
-    if item["requestedModel"] != "gpt-image-2.5" or execution.get("requestedModel") != item["requestedModel"]:
+    if item["requestedModel"] not in IMAGE_MODELS or execution.get("requestedModel") != item["requestedModel"]:
         raise ValidationError("API requested model differs from execution")
     if execution.get("reportedModel") != item["reportedModel"]:
         raise ValidationError("API reported model differs from actual receipt")

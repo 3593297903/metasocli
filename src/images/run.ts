@@ -112,7 +112,7 @@ export async function runImages(root:string,id:string,authorize:boolean,deps:Ima
     halt=ledger.slots.some(unacceptedUnknown);
     const retry=retryOf?existing.find(j=>j.operationId===retryOf):undefined;
     if(retryOf&&(!authorize||!retry||!['failed','rejected'].includes(retry.status)||existing.some(j=>j.retryOf===retryOf)))fail('IMAGE_RETRY_FORBIDDEN','Only a definitively failed/rejected original request can get one explicitly authorized new attempt. Unknown requests cannot retry.');
-    const toStart=retryOf?1:plan.items.filter(i=>{const row=run?.items.find(r=>r.assetId===i.assetId),job=row?.operationId?existing.find(j=>j.operationId===row.operationId):undefined;return job?['prepared','waiting_dependency'].includes(job.status):i.action==='generate';}).length;
+    const toStart=retryOf?1:plan.items.filter(i=>{const row=run?.items.find(r=>r.assetId===i.assetId),job=row?.operationId?existing.find(j=>j.operationId===row.operationId):undefined;return job?job.planId===id&&['prepared','waiting_dependency'].includes(job.status):i.action==='generate';}).length;
     assertKnownCapacity(profile,toStart);
     const referenceCopies=new Set<string>();
     if(toStart)for(const item of plan.items)for(const dep of item.dependencySources){if(dep.hash&&await exists(await projectPath(root,`.metasocli/image-inputs/files/${dep.hash}.image`)))continue;referenceCopies.add(dep.hash??dep.producer!);}
@@ -196,7 +196,9 @@ export async function runImages(root:string,id:string,authorize:boolean,deps:Ima
     for(const job of jobs)if(!['prepared','waiting_dependency','rejected','failed','blocked','superseded','reused'].includes(job.status))startRecovery(job);
     const dispatched=new Set<string>();
     for(;;){const scanVersion=completionVersion;await scheduler.assertOwned();let capacityBlocked=false;
-      if(!halt)for(const job of jobs){if(halt)break;if(!['prepared','waiting_dependency'].includes(job.status)||dispatched.has(job.operationId)|| (retry&&job.assetId!==retry.assetId))continue;
+      if(!halt)for(const job of jobs){if(halt)break;
+        // A recovery entry can collect another plan's result; only its owner can send a pending request.
+        if(job.planId!==id||!['prepared','waiting_dependency'].includes(job.status)||dispatched.has(job.operationId)|| (retry&&job.assetId!==retry.assetId))continue;
         const item=plan.items.find(i=>i.assetId===job.assetId)!;let lease:Awaited<ReturnType<typeof acquireLease>>|undefined;
         try {
           const ready=await withImageLedger(profile,deps.runtimeRoot,async(shared,save)=>withProjectWrite(root,async()=>{
@@ -278,12 +280,19 @@ async function writeImageIndex(root:string,plan:ImagePlanRecord){
 }
 export async function imageStatus(root:string,id?:string){
   const plan=id?await readImagePlan(root,id):undefined,run=plan?await readImageRun(root,plan):undefined;
-  const all=await listImageJobs(root),jobs=plan?all.filter(j=>run?.items.some(i=>i.operationId===j.operationId)):all;
+  const sourcePlans=new Map<string,ImagePlanRecord>(),all=await listImageJobs(root,sourcePlans);
+  const operations=new Map<string,string|undefined>();
+  for(const row of run?.items??plan?.items??[])operations.set(row.assetId,row.operationId);
+  const jobs=plan?all.filter(j=>j.operationId===operations.get(j.assetId)):all;
+  const byAsset=new Map(jobs.map(job=>[job.assetId,job]));
   const count=(...statuses:string[])=>jobs.filter(j=>statuses.includes(j.status)).length;
   const story=await loadStory(root);
-  const items=plan?plan.items.map(item=>({assetId:item.assetId,kind:item.kind,size:item.size,requestedModel:plan.profile.model,requiredBy:item.requiredBy,
-    existingRelativePath:item.action==='reuse'?story.assets.find(a=>a.recipe.assetId===item.assetId)?.media?.path:undefined,
-    ...(jobs.find(j=>j.operationId===run?.items.find(i=>i.assetId===item.assetId)?.operationId)??{status:item.action==='reuse'?'reused':item.action==='blocked'?'blocked':'prepared'})})):jobs;
+  const items=plan?plan.items.map(item=>{
+    const job=byAsset.get(item.assetId);
+    return {assetId:item.assetId,kind:item.kind,size:item.size,requestedModel:job?sourcePlans.get(job.planId)!.profile.model:plan.profile.model,requiredBy:item.requiredBy,
+      existingRelativePath:item.action==='reuse'?story.assets.find(a=>a.recipe.assetId===item.assetId)?.media?.path:undefined,
+      ...(job??{status:item.action==='reuse'?'reused':item.action==='blocked'?'blocked':'prepared'})};
+  }):jobs;
   const checkFile=id?await projectPath(root,`.metasocli/image-runs/${id}-video-check.json`):undefined;
   return {videoCheck:checkFile&&await exists(checkFile)?await readJson(checkFile):undefined,indexPath:id?`.metasocli/image-runs/${id}-index.md`:undefined,planId:id,planHash:plan?.planHash,submissionMode:'all-ready',providerCapacity:plan?.profile.providerLimits??'unknown; not verified',run,
     summary:{total:plan?.items.length??jobs.length,reused:plan?.items.filter(i=>i.action==='reuse').length??count('reused'),waitingDependency:count('waiting_dependency'),notStarted:count('prepared'),

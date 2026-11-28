@@ -18,12 +18,13 @@ export async function readImageJob(root:string,id:string,plans?:Map<string,Image
   const job=parse(ImageJob,await readJson(await imagePath(root,'image-jobs',id))),plan=plans?.get(job.planId)??await readImagePlan(root,job.planId);
   plans?.set(job.planId,plan);
   if(job.operationId!==id||job.projectId!==plan.projectId||job.planHash!==plan.planHash||!plan.items.some(i=>i.assetId===job.assetId&&i.fingerprint===job.fingerprint)) fail('IMAGE_JOB_CONFLICT','Image job does not belong to its frozen plan.');
+  if(job.input && job.input.model!==plan.profile.model) fail('IMAGE_JOB_CONFLICT','Image request model differs from its frozen plan.');
   if(job.input && (canonicalSha256(job.input)!==job.requestHash||canonicalSha256({fingerprint:job.fingerprint,input:job.input})!==job.inputHash)) fail('IMAGE_JOB_CONFLICT','Image effective input hash changed.');
   return job;
 }
-export async function listImageJobs(root:string) {
+export async function listImageJobs(root:string,plans=new Map<string,ImagePlanRecord>()) {
   const directory=await projectPath(root,'.metasocli/image-jobs'); if(!await exists(directory)) return [];
-  const jobs=[],plans=new Map<string,ImagePlanRecord>(); for(const file of await readdir(directory)) if(file.endsWith('.json')) jobs.push(await readImageJob(root,file.slice(0,-5),plans));
+  const jobs=[]; for(const file of await readdir(directory)) if(file.endsWith('.json')) jobs.push(await readImageJob(root,file.slice(0,-5),plans));
   return jobs.sort((a,b)=>a.preparedAt.localeCompare(b.preparedAt)||a.attempt-b.attempt);
 }
 export async function saveImageRun(root:string,run:ImageRunRecord) {

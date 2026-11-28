@@ -39,8 +39,8 @@ description: 沿用 metasocli 成品视频提示词流程，以 jianc 风格的�
    - `prop`：[道具结构材质板](references/prop-board.md)。
    - `first_frame`：继续使用原 [单幅首帧规则](../metasocli-reference-images/references/first-frame.md)，不把多格设计板当作首帧。
 3. 本入口新准备的人物、场景、道具配方只采用上述新模板的风格、布局及内容组织方法。不要执行共用图片技能要求读取旧三类类型模板的步骤，也不把旧模板或默认写实摄影描述拼入配方；共用技能保留的原文事实、资产身份、完整配方传递及技术校验规则继续适用。每项资产直接形成一份新模板配方并提交一次，不先按旧模板生成一张再转成新类型。用户当前明确指定的风格或素材优先。视频原文、人物身份和剧情事实保持原样，不向视频正文追加或替换美术风格。
-4. 一项资产生成一份独立完整提示词。将本故事具体外观、完整板式、实际标题与资料、各视图标签、材质、光影和连续性要求展开，不只写“按 jianc 模板”。基础文本定稿后、保存哈希和交接之前，完整执行 [按 kind 追加原文](../metasocli-reference-images/references/denoise-policy.md)：以 entrySkill=metasoclitk 调用包内 append_asset_denoise.py compose/check，character/scene/prop 各只追加对应全文一次并放在末尾；这是共享技术尾段，jianc 三类模板仍完整使用，不叠加所继承入口的第二份。按原契约保存 request/recipe 并校验；将工具输出的完整 `prompt` 同时写入 `generationPrompt` 和草稿 `recipes[].prompt`，使用追加后的 recipeSha256。事实保留在 `sourceFacts`，生成设定在 `visualDescription` 中明确区分；不增加契约不支持的 JSON 字段。first_frame、旁白与旧配方/计划恢复不追加。
-5. 收齐本次全部集/段的配方及交接，调用共用 images prepare/run/collect，再沿原图片流程使用 `api / gpt-image-2.5 / all-ready`。读取实际计划确认人物、场景、道具的默认请求尺寸为 `1920x1088`；若安装配置不同，为本次计划传入支持的显式 profile，不修改全局默认。当前用户明确更高规格时按原图片文档匹配实际 size。`built_in` 仅在用户明确选择时使用，已有真实参考图依赖按原顺序传入。缺少图片 Key 时继续离线准备与计划。
+4. 一项资产只编写一份完整提示词，具体展开本故事的人物、各格取景、材质与光影。新人物首稿默认画内无字，无图用文字生成，有用户指定的排版、身份或服装参考图时，分别写明用途并作为真实依赖按原顺序随首稿发送。在保存哈希前执行[配方画质规则](../metasocli-reference-images/references/denoise-policy.md)，继承普通或旁白流程时也以 entrySkill=metasoclitk 调用 append_asset_denoise.py compose/check。新人物首稿直接使用自己的正文。仅当用户明确修整已有成图材质时才标记 purpose=retouch。场景和道具沿用各自原文。将工具返回的完整 prompt 同时写入 generationPrompt 和草稿 recipes[].prompt，沿用对应 recipeSha256。原文事实保存在 sourceFacts，制作补足写在 visualDescription。
+5. 收齐本次全部集/段的配方及交接，调用共用 images prepare/run/collect，再沿原图片流程使用 `api / gpt-image-2.6-sunburst / all-ready`。按固定图片工作流生成本批 profile，读取计划确认新人物按实际 assetId 取 `1536x2048`，场景、道具默认 `1920x1088`；若安装配置不同，为本次计划传入支持的显式 profile，不修改全局默认。当前用户明确更高规格时按原图片文档匹配实际 size。`built_in` 仅在用户明确选择时使用，已有真实参考图依赖按原顺序传入。缺少图片 Key 时继续离线准备与计划。
 6. 原样执行原技能的首次图片保存、技术校验、正式登记及结果交接，不增加审美评分、OCR、自动重画或逐图批准。必要素材 ready 后，调用一次 `video run` 冻结所选段和整集父计划，已授权时同次加 `--confirm` 执行并交付，实际请求保持 `context_ir_enabled:true`。恢复、一次性重试与图片/视频阶段互斥均使用原正式入口。
 
 ## 授权、复用与旁白
@@ -63,7 +63,7 @@ $metasoclitk
 
 完整遵循 [项目隔离与冷切换](../../docs/PROJECT_ISOLATION.md)。不同故事的缺图、依赖等待、暂停、未知或目录异常不阻止本故事使用空余容量；同故事锁、阶段互斥、同一集段同输入未知防重和一次性重试规则保留。默认不要求 --accept-existing-unknown；旧确认仅保留审计身份，不扩大授权或重发未知。
 
-图片保持 gpt-image-2.5 / all-ready / 有效600秒，配置的 concurrent/RPM 共享核验。视频保持 MiniMax-H3、context_ir_enabled:true，全机同 runtime 合计最多4个当前已知有效占位，项目 concurrency 为附加上限；未知创建异常结束/执行者退出、实际GET失败、外部证据不可核实时自动释放，原记录保留；新证据证明活跃则恢复，达到或超过4暂停新增。远端真实任务数可能超过4，图片与原结果恢复仍可运行。不得删除旧未知、换 runtime 或伪造终态腾位。
+图片保持 gpt-image-2.6-sunburst / all-ready / 有效600秒，配置的 concurrent/RPM 共享核验。视频保持 MiniMax-H3、context_ir_enabled:true，全机同 runtime 合计最多4个当前已知有效占位，项目 concurrency 为附加上限；未知创建异常结束/执行者退出、实际GET失败、外部证据不可核实时自动释放，原记录保留；新证据证明活跃则恢复，达到或超过4暂停新增。远端真实任务数可能超过4，图片与原结果恢复仍可运行。不得删除旧未知、换 runtime 或伪造终态腾位。
 
 images run/resume/retry 与 batch run/resume/retry 支持 --capacity-wait-ms 30000 --capacity-poll-ms 250。耗尽后保留原计划/批次授权和 operationId，按原 resume 继续；准确区分本项目未知、依赖未就绪、共享容量等待、同项目进程占锁和协调器损坏。视频批次只查询当前故事，其他故事由其自身恢复落盘终态，不自动跟随外部 GET。
 

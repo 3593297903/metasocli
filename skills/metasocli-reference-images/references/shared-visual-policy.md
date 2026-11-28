@@ -19,7 +19,7 @@ Unless the user or handoff specifies another style, use photorealistic live-acti
 
 - Character, scene, and prop outputs are production reference boards. They explain declared identity, space, material, state, and applicable use; they are not substitutes for video generation.
 - Multiple views, necessary state demonstrations, and explicitly requested ownership comparisons express only the declared asset facts, not new story events.
-- Titles, view labels, information fields, and material/state notes are presentation aids organized naturally from the original templates and supplied facts. The JSON handoff remains the semantic source of truth. `exactText` lists only user-requested verbatim copy; an empty list does not prohibit text.
+- Portrait character boards keep names and profile facts in the recipe and use a text-free canvas by default. For legacy landscape character, scene and prop boards, titles, view labels, information fields, and material/state notes are presentation aids organized naturally from the original templates and supplied facts. The JSON handoff remains the semantic source of truth. `exactText` lists only user-requested verbatim copy; an empty list does not prohibit text.
 - Pass user-requested exact text into the prompt; rendering is not guaranteed. Do not perform automatic text recognition or claim exact typography was achieved. The user judges the returned image.
 - Do not encode machine identifiers, hashes, or binding data only inside the image.
 

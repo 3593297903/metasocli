@@ -56,7 +56,8 @@ export async function createImagePlan(root:string,input:ImageScope,persistence?:
   if(input.submissionMode!==undefined&&input.submissionMode!=='all-ready')fail('IMAGE_MODE','Only all-ready image submission is supported.');
   const profile=parse(ImageProfile,input.profile??await loadImageProfile());
   return withProjectWrite(root,async()=>{
-    const story=await loadStory(root),jobs=await listImageJobs(root);
+    const sourcePlans = new Map<string,ImagePlanRecord>();
+    const story=await loadStory(root),jobs=await listImageJobs(root,sourcePlans);
     const restart=input.restartOf?await readImagePlan(root,input.restartOf):undefined;
     const restartAncestors=new Set<string>();
     for(let ancestor=restart;ancestor;ancestor=ancestor.restartOf?await readImagePlan(root,ancestor.restartOf):undefined){
@@ -78,16 +79,23 @@ export async function createImagePlan(root:string,input:ImageScope,persistence?:
         if(['blocked','superseded'].includes(previous.status)&&(previous.input||previous.requestStartedAt||previous.result))fail('IMAGE_RESTART_RECOVERY_REQUIRED','Recover an existing submitted result before replacing its plan.');
         action='generate';operationId=undefined;reason=undefined;retryOf=previous.operationId;
       }
-      const size=profile.sizes[id]??(recipe.kind==='first_frame'?profile.firstFrameSize:profile.boardSize),[w,h]=size.split('x').map(Number) as [number,number];
+      const explicitSize = Object.hasOwn(profile.sizes, id) ? profile.sizes[id] : undefined;
+      const size = explicitSize ?? (recipe.kind === 'first_frame' ? profile.firstFrameSize : profile.boardSize);
+      const [w,h] = size.split('x').map(Number) as [number,number];
       if(action==='generate') {
+        const portraitCharacter = recipe.kind === 'character' && explicitSize === '1536x2048';
         const pixels=[...recipe.prompt.matchAll(/\b(\d{3,4})\s*[x×]\s*(\d{3,4})\b/gu)];
         if((/\b4K\b/iu.test(recipe.prompt)&&Math.max(w,h)<4096)||(/\b2K\b/iu.test(recipe.prompt)&&Math.max(w,h)<2048)
-          ||pixels.some(m=>Number(m[1])!==w||Number(m[2])!==h)||(recipe.kind!=='first_frame'&&w<h)) {action='blocked';reason='Requested image specification conflicts with configured size; choose an explicit documented size.';}
-        if(recipe.kind==='first_frame'&&!profile.sizes[id]&&(required.get(id)??[]).some(b=>!['9:16','adaptive'].includes(story.episodes.find(e=>e.id===b.episodeId)!.segments.find(s=>s.id===b.segmentId)!.parameters.ratio))) {action='blocked';reason='This first frame needs an explicit documented size for its composition.';}
+          ||pixels.some(m=>Number(m[1])!==w||Number(m[2])!==h)||(recipe.kind!=='first_frame'&&!portraitCharacter&&w<h)) {action='blocked';reason='Requested image specification conflicts with configured size; choose an explicit documented size.';}
+        if(recipe.kind==='first_frame'&&!explicitSize&&(required.get(id)??[]).some(b=>!['9:16','adaptive'].includes(story.episodes.find(e=>e.id===b.episodeId)!.segments.find(s=>s.id===b.segmentId)!.parameters.ratio))) {action='blocked';reason='This first frame needs an explicit documented size for its composition.';}
       }
       const dependencySources=recipe.dependencies.map(assetId=>{const upstream=items.find(i=>i.assetId===assetId);if(!upstream)fail('IMAGE_DEPENDENCY_KIND','Image dependencies must be images, not narration.');return {assetId,hash:upstream.action==='reuse'?upstream.targetHash:null,producer:upstream.action==='reuse'?null:upstream.operationId?jobs.find(j=>j.operationId===upstream.operationId)!.fingerprint:upstream.fingerprint};});
       const identity={assetId:id,kind:recipe.kind,recipeHash:asset.recipeHash,promptHash,promptPath,dependencies:recipe.dependencies,dependencySources,targetHash:asset.media?.sha256??null,size,requiredBy:required.get(id)??[]};
-      items.push({...identity,fingerprint:canonicalSha256({identity,profile}),action,...(reason?{reason}:{}),...(operationId?{operationId}:{}),...(retryOf?{retryOf}:{})});
+      // Recovery follows the original model while still checking the current recipe, bindings and other profile fields.
+      const fingerprintProfile = action === 'recover' && previous
+        ? {...profile, model: sourcePlans.get(previous.planId)!.profile.model}
+        : profile;
+      items.push({...identity,fingerprint:canonicalSha256({identity,profile:fingerprintProfile}),action,...(reason?{reason}:{}),...(operationId?{operationId}:{}),...(retryOf?{retryOf}:{})});
     }
     const base={schemaVersion:1 as const,planId:persistence?parse(z.uuid(),persistence.planId):randomUUID(),projectId:story.projectId,createdAt:new Date().toISOString(),revisionAtCreation:story.revision,...(restart?{restartOf:restart.planId}:{}),profile,scope,items};
     const plan=parse(ImagePlan,{...base,planHash:canonicalSha256(base)});

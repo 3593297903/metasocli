@@ -4,7 +4,7 @@ import { projectPath } from '../storage/paths.js';
 import { readStable } from '../storage/io.js';
 import { sha256Hex } from '../storage/canonical.js';
 import type { Fetch } from '../metaso/transport.js';
-import { IMAGE_ORIGIN, type EffectiveInput, type Profile } from './contracts.js';
+import { IMAGE_ORIGIN, ImageModel, type EffectiveInput, type Profile } from './contracts.js';
 import { streamHash } from './stream.js';
 import { effectiveImageTimeout, imageDispatcher, imageTransportFailure } from './transport.js';
 
@@ -14,7 +14,10 @@ export class YicImageClient implements ImageClient {
     if(!/^[\x21-\x7e]{1,4096}$/u.test(key))fail('IMAGE_KEY_INVALID','Image API key must be a token without whitespace.');
   }
   async create(root:string,input:EffectiveInput,profile:Profile):Promise<Response> {
-    if(input.origin!==IMAGE_ORIGIN||profile.origin!==IMAGE_ORIGIN||input.model!=='gpt-image-2.5')fail('IMAGE_ORIGIN','Image credential is restricted to its approved API origin/model.');
+    if (input.origin !== IMAGE_ORIGIN || profile.origin !== IMAGE_ORIGIN ||
+        input.model !== profile.model || !ImageModel.safeParse(input.model).success) {
+      fail('IMAGE_ORIGIN', 'Image credential is restricted to the approved API origin and frozen model.');
+    }
     const prompt=(await readStable(await projectPath(root,input.promptPath),128000)).toString('utf8');
     if(sha256Hex(prompt)!==input.promptHash)fail('IMAGE_INPUT_CHANGED','Image prompt snapshot changed.');
     const fields={model:input.model,prompt,quality:input.quality,size:input.size,n:1,response_format:input.response_format};

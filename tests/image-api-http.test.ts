@@ -17,7 +17,7 @@ it('receives 200 complete HTTP request bodies before any success; all 200 bodies
   let firstResponse=Infinity,releaseAt=0,serverFailure:unknown;
   const server=createServer(async(req,res)=>{try{
     const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(chunk);const body=Buffer.concat(chunks),data=JSON.parse(body.toString());
-    expect(req.url).toBe('/v1/images/generations');expect(req.headers.authorization).toBe('Bearer offline-test-key');expect(data.n).toBe(1);expect(data.model).toBe('gpt-image-2.5');
+    expect(req.url).toBe('/v1/images/generations');expect(req.headers.authorization).toBe('Bearer offline-test-key');expect(data.n).toBe(1);expect(data.model).toBe('gpt-image-2.6-sunburst');
     const assetId=data.prompt.split(' ')[0];expect(data.prompt).toBe(`${assetId} 完整图片提示词：保留所有汉字\n第二行，不改写。`);
     expect(responses.has(assetId)).toBe(false);responses.set(assetId,res);arrivals.push({assetId,at:Date.now(),bytes:body.length,hash:sha256Hex(body)});
     if(arrivals.length===200){releaseAt=Date.now();for(const response of responses.values()){firstResponse=Math.min(firstResponse,Date.now());response.writeHead(200,{'content-type':'application/json'});response.write('{"data":[');}}

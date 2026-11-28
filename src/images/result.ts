@@ -85,9 +85,13 @@ export async function receiveImage(root:string,job:ImageJobRecord,profile:Profil
     delete job.error;await saveImageJob(root,job);
   });
 }
-export async function downloadImageResult(root:string,job:ImageJobRecord,profile:Profile,ctx:ResultContext){return ctx.download.use(async()=>{
+async function readResultReceipt(root:string,job:ImageJobRecord) {
   const receipt=parse(ImageReceipt,await readJson(await projectPath(root,receiptFile(job.operationId,'receipt.json'))));
-  if(receipt.operationId!==job.operationId||receipt.requestHash!==job.requestHash)fail('IMAGE_RECEIPT_CONFLICT','Image receipt identity changed.');
+  if(receipt.operationId!==job.operationId||receipt.requestHash!==job.requestHash||receipt.requestedModel!==job.input?.model)fail('IMAGE_RECEIPT_CONFLICT','Image receipt identity or requested model changed.');
+  return receipt;
+}
+export async function downloadImageResult(root:string,job:ImageJobRecord,profile:Profile,ctx:ResultContext){return ctx.download.use(async()=>{
+  const receipt=await readResultReceipt(root,job);
   let result=await ctx.decode.use(()=>restoreResult(root,job,profile));
   if(!result){if(!receipt.url)fail('IMAGE_RESULT_MISSING','No recoverable local image or saved URL.');
     const path=await projectPath(root,receiptFile(job.operationId,'download.bin'));await ctx.checkpoint?.('download-before',job);
@@ -104,6 +108,8 @@ export async function registerImageResult(root:string,job:ImageJobRecord,plan:Im
   if(!job.result)fail('IMAGE_RESULT_MISSING','The returned image must be saved before registration.');
   const item=plan.items.find(i=>i.assetId===job.assetId)!;
   await ctx.checkpoint?.('register-before',job);
+  const receiptPath=receiptFile(job.operationId,'receipt.json');
+  const receipt=await exists(await projectPath(root,receiptPath))?await readResultReceipt(root,job):undefined;
   await registerAsset(root,job.assetId,{file:await projectPath(root,job.result.path),provenance:'imagegen',expectedSha256:job.result.sha256},undefined,async(story,asset)=>{
     // A user may have explicitly selected this exact recovered file after unrelated segment bindings changed.
     // Preserve that existing selection; project, recipe, prompt, job and actual dependency checks still apply.
@@ -116,8 +122,7 @@ export async function registerImageResult(root:string,job:ImageJobRecord,plan:Im
     if((asset.media?.sha256??null)!==item.targetHash)fail('IMAGE_TARGET_CHANGED','User-selected target changed; preserve the generated result without replacing the new selection.');
   });
   await ctx.checkpoint?.('register-saved',job);job.status='registered';job.registeredAt??=new Date().toISOString();delete job.error;await saveImageJob(root,job);
-  const jobPath=`.metasocli/image-jobs/${job.operationId}.json`,receiptPath=receiptFile(job.operationId,'receipt.json');
-  const receipt=await exists(await projectPath(root,receiptPath))?parse(ImageReceipt,await readJson(await projectPath(root,receiptPath))):undefined;
+  const jobPath=`.metasocli/image-jobs/${job.operationId}.json`;
   await writeJson(await projectPath(root,receiptFile(job.operationId,'execution.json')),{schemaVersion:1,operationId:job.operationId,assetId:job.assetId,provider:'yiciyuang',
     requestedModel:job.input!.model,reportedModel:receipt?.reportedModel??null,requestedSize:job.input!.size,width:job.result.width,height:job.result.height,
     planId:job.planId,planHash:job.planHash,requestHash:job.requestHash,inputHash:job.inputHash,jobPath,jobSha256:sha256Hex(await readStable(await projectPath(root,jobPath))),

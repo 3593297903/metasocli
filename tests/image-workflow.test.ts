@@ -1,14 +1,15 @@
 import { afterEach, expect, test } from 'vitest';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { cleanup } from './helpers.js';
+import { cleanup, png } from './helpers.js';
 import { workflowFixture } from './image-workflow-helpers.js';
 import { prepareImages } from '../src/images/preparation.js';
 import { collectImages, imageSummary } from '../src/images/reporting.js';
 import { importStory, loadStory } from '../src/core/project.js';
 import { createImagePlan } from '../src/images/planning.js';
 import { readImagePlan } from '../src/images/store.js';
-import { runImages, recoverImage } from '../src/images/run.js';
+import { imageStatus, runImages, recoverImage } from '../src/images/run.js';
+import { YicImageClient } from '../src/images/client.js';
 import { effectiveImageInput } from '../src/images/planning.js';
 import { listImageJobs, readImageRun, saveImageRun } from '../src/images/store.js';
 import { sha256Hex } from '../src/storage/canonical.js';
@@ -37,7 +38,7 @@ test('prepare output equals original import/plan; repeat and registered progress
   const report=await collectImages(f.root,{preparation:prepared.preparationId});
   expect(report.complete).toBe(true);expect(report.episodes).toHaveLength(2);
   const result=JSON.parse(await readFile(join(f.root,report.episodes[0]!.resultPath!),'utf8'));
-  expect(result.assets[0]).toMatchObject({status:'generated',recipeSha256:plan.items[0]!.promptHash,generationMode:'api',requestedModel:'gpt-image-2.5'});
+  expect(result.assets[0]).toMatchObject({status:'generated',recipeSha256:plan.items[0]!.promptHash,generationMode:'api',requestedModel:'gpt-image-2.6-sunburst'});
   expect(result.assets[0].recipeSha256).not.toBe(plan.items[0]!.recipeHash);
   const again=await collectImages(f.root,{preparation:prepared.preparationId});expect(again.collectionId).not.toBe(report.collectionId);expect(posts).toBe(2);
 },60000);
@@ -49,6 +50,45 @@ test('partial results preserve actual unknown/dependency status and collect neve
   const report=await collectImages(f.root,{preparation:p.preparationId});expect(report.complete).toBe(false);expect(report.episodes[0]!.resultPath).toBeNull();
   expect((await imageSummary(f.root,p.planId!)).counts.unknown).toBeGreaterThan(0);
   expect(await Promise.all(files.map(n=>readFile(join(dir,n))))).toEqual(before);expect(posts).toBeLessThanOrEqual(2);
+},30000);
+
+test('a Sunburst preparation collects a pending 2.5 URL under its original operation without reposting',async()=>{
+  const f = await workflowFixture(1,1);
+  await writeFile(join(f.root,'legacy-profile.json'),JSON.stringify({...profile,model:'gpt-image-2.5'}));
+  const oldBatch = join(f.root,'legacy-batch.json');
+  await writeFile(oldBatch,JSON.stringify({...f.batch,profilePath:'legacy-profile.json'}));
+  const original = await prepareImages(f.root,{batch:oldBatch});
+  const runtimeRoot = join(f.root,'runtime');
+  const sent: string[] = [];
+  const client = new YicImageClient('offline-test-key',async (_url,init)=>{
+    sent.push(JSON.parse(String(init?.body)).model);
+    return Response.json({data:[{url:'https://example.test/old.png'}]});
+  });
+  await runImages(f.root,original.planId!,true,{runtimeRoot,client,fetcher:async()=>{throw Error('offline download interrupted');}});
+  const [old] = await listImageJobs(f.root);
+  expect(old).toMatchObject({status:'received',input:{model:'gpt-image-2.5'}});
+  const next = await prepareImages(f.root,{batch:f.batchPath});
+  const plan = await readImagePlan(f.root,next.planId!);
+  expect(plan.profile.model).toBe('gpt-image-2.6-sunburst');
+  expect(plan.items[0]).toMatchObject({action:'recover',operationId:old!.operationId,fingerprint:old!.fingerprint});
+  expect((await imageStatus(f.root,plan.planId)).items[0]).toMatchObject({operationId:old!.operationId,requestedModel:'gpt-image-2.5'});
+  const receiptPath = join(f.root,'.metasocli/image-receipts',old!.operationId,'receipt.json');
+  const receipt = await readFile(receiptPath,'utf8');
+  await writeFile(receiptPath,JSON.stringify({...JSON.parse(receipt),requestedModel:plan.profile.model}));
+  let downloads = 0;
+  const fetcher = async()=>{downloads++;return new Response(png(1024,1024));};
+  expect(await recoverImage(f.root,old!.operationId,{runtimeRoot,fetcher})).toMatchObject({error:{code:'IMAGE_RECEIPT_CONFLICT'}});
+  expect(downloads).toBe(0);
+  await writeFile(receiptPath,receipt);
+  await runImages(f.root,original.planId!,false,{runtimeRoot,client,fetcher});
+  for(const preparation of [original,next]){
+    const report = await collectImages(f.root,{preparation:preparation.preparationId});
+    expect(report.complete).toBe(true);
+    const result = JSON.parse(await readFile(join(f.root,report.episodes[0]!.resultPath!),'utf8'));
+    expect(result.assets[0]).toMatchObject({operationId:old!.operationId,requestedModel:'gpt-image-2.5'});
+  }
+  expect(downloads).toBe(1);
+  expect(sent).toEqual(['gpt-image-2.5']);
 },30000);
 
 test('7 registered / 20 unknown / 2 dependent entries stay partial, unchanged and offline',async()=>{
@@ -76,13 +116,12 @@ test('download failure collection does not GET; original recovery yields null re
   await runImages(f.root,p.planId!,true,deps);const before=gets;
   expect((await collectImages(f.root,{preparation:p.preparationId})).complete).toBe(false);expect(gets).toBe(before);
   const job=(await listImageJobs(f.root))[0]!;
-  const {png}=await import('./helpers.js');
   expect((await recoverImage(f.root,job.operationId,{...deps,fetcher:async()=>new Response(png(1024,1024))})).status).toBe('registered');
   const report=await collectImages(f.root,{preparation:p.preparationId});
   const result=JSON.parse(await readFile(join(f.root,report.episodes[0]!.resultPath!),'utf8'));
   expect(result.assets[0].reportedModel).toBeNull();expect(result.assets[0].stagedRelativePath).toBe((await listImageJobs(f.root))[0]!.result!.path);expect(posts).toBe(1);
   const execution=join(f.root,result.assets[0].executionRelativePath),raw=await readFile(execution,'utf8');
-  await writeFile(execution,raw.replace('"requestedModel": "gpt-image-2.5"','"requestedModel": "invented"'));
+  await writeFile(execution,raw.replace('"requestedModel": "gpt-image-2.6-sunburst"','"requestedModel": "invented"'));
   await expect(collectImages(f.root,{preparation:p.preparationId})).rejects.toMatchObject({code:'IMAGE_HANDOFF_INVALID'});expect(posts).toBe(1);
 },30000);
 

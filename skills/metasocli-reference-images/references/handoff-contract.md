@@ -44,7 +44,7 @@ Rules:
 - `continuityRequirements` states what must remain stable across all linked segments.
 - `exclude` carries explicit user exclusions or concrete story-specific limits, not automatically appended creative prohibition lists. Describe the requested appearance and effect positively.
 - `dependencyAssetIds` refers only to earlier assets in the same request and contains no self-reference or cycles.
-- `exactText` contains only content the user explicitly requests verbatim. An empty list means no additional verbatim requirement, not a text ban. Ordinary titles, view labels, information fields, and material/state notes are organized naturally from the original templates and supplied facts. Do not invent measurements or story evidence.
+- `exactText` contains only content the user explicitly requests verbatim. An empty list means no additional verbatim requirement, not a text ban. Portrait character sheets default to no visible text; identity and appearance stay in the handoff. For landscape character, scene and prop boards, ordinary titles, view labels, information fields, and material/state notes are organized naturally from the original templates and supplied facts. Do not invent measurements or story evidence.
 - `modelPreference` is an informational preference. A null preference means use the available default image generator without naming a model. The current contract has no trusted exact-model evidence source, so `requireExactModel: true` fails validation with `EXACT_MODEL_UNVERIFIABLE` before recipe planning or image generation.
 
 The upstream stage owns the values above. This Skill may reject an invalid or underspecified item, but may not rewrite its identity or allocation.
@@ -122,7 +122,7 @@ For `generated`, the result prompt and recipe hash must equal the corresponding 
 
 The result is an execution handoff, not the project truth source. Only the downstream orchestrator may call the project's registration operation and update canonical state.
 
-For every `generated` result, save and display the first returned image, then hand it off directly. The full actual prompt must include the type template's concrete layout and information content, not an orchestrator/script summary. `contentSha256` and `recipeSha256` bind the image and planned prompt; reference roles, output dimensions and actual call metadata can be saved separately as execution facts, never a quality certificate. Ordinary titles, profiles, labels, and explanatory notes are included whether `exactText` is empty or not.
+For every `generated` result, save and display the first returned image, then hand it off directly. The full actual prompt must include the type template's concrete layout and information content, not an orchestrator/script summary. `contentSha256` and `recipeSha256` bind the image and planned prompt; reference roles, output dimensions and actual call metadata can be saved separately as execution facts, never a quality certificate. Apply the template for each kind. Portrait character sheets default to a text-free canvas; retain explicitly requested verbatim text.
 
 No new `inspectionRelativePath`, `inspectionSha256`, `inspection`, QA receipt, visual-observation file, or `qaEvidence` is produced. Do not perform automatic output inspection, text recognition, scoring, pass/fail assessment, regeneration, or per-image confirmation. The user chooses satisfactory images and requests any later edits explicitly. `generated`/registered/ready mean produced and technically usable, not visually approved.
 
@@ -155,7 +155,7 @@ No legacy handoff or QA records are imported. Do not clear historical problems, 
 
 request 和 recipe 继续使用 1.0.0，不改变旧配方哈希。旧 result 1.0.0 继续只接受 built_in/not_run；result 1.1.0 保留原全部字段，每项增加以下三个字段：
 
-- `requestedModel`：API generated 必须为真实请求中的 `gpt-image-2.5`；其他项 null。
+- `requestedModel`：API generated 使用实际请求型号 `gpt-image-2.6-sunburst` 或 `gpt-image-2.5`，并与执行记录及回执核对；其他项 null。
 - `executionRelativePath`：API generated 为 `.metasocli/image-receipts/<operationId>/execution.json`；其他项 null。
 - `executionSha256`：上述实际执行记录文件的 SHA-256；其他项 null。
 

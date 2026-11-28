@@ -1,40 +1,15 @@
-# Character turnaround boards
+# 通用人物五视图首稿
 
-Read only for `character` assets.
+每个 character 素材 ID 对应一个人物的一套造型。用剧本及交接事实填写各格，写成能独立发送的一份提示词。沿用本故事的画风、时代、身份、服装和姿态。先读[五视图首稿构图](portrait-layout.md)，将其中两段正文分别写在开篇和下排开头，再用以下各格说明填写当前角色。
 
-## Purpose
+一张 1536×2048、精确 3:4 的纯白竖幅五视图，同一人同一套衣装。白底贯通各视图，画内默认无姓名、标题、资料栏、编号、标签、水印和分隔线。姓名与角色资料保存在交接配方中；明确要求逐字入画的内容按 exactText 放置。
 
-Lock one character's face, hair, age presentation, body proportions, primary costume, accessories, and footwear for reuse across video segments. One asset ID represents one stable look.
+上排约三分之一。左为正面头肩肖像，右为人物自身左侧严格 90° 头肩肖像，鼻尖朝画面右。两个头像同尺度，发顶、五官和下巴完整。把当前人物具体的脸型、肤色、眼眉鼻唇、表情及侧脸轮廓写在这段；按事实填入年龄感、前额与鬓侧发型。
 
-## Default composition
+下排约三分之二。左格展示无头的正面着装身形，双肩、躯干、髋和双脚正对镜头。中格展示无头的左侧 90° 着装身形，躯干、髋和脚尖同向朝画面右。两格使用人物自己的身形、肤色与双手，从自然下巴底高度的短颈平顶开始，到鞋底结束。短颈平顶上方直至上排均为连续白底，无空白头形、面罩或遮挡块。仅描述当格看得到的衣领、肩、手、衣摆、鞋和配饰，保留适用的颈线以下垂发。按穿戴者的左右和视角写出可见与被遮挡的细节。剧本明确手持物件时，将握持的手、物件材质及当前状态写进可见的衣装视角，并在背面处理遮挡。
 
-- horizontal 16:9 production board when the tool supports that request;
-- clean white or neutral seamless background with subtle contact shadows;
-- left column: a large frontal facial close-up above a clear side facial close-up;
-- next to the face column: the current character's name or role as a visible title and a concise profile area;
-- remaining width: three clearly labeled complete full-body views, front, strict 90-degree side, and back, with consistent scale and ground line;
-- the same person, hairstyle, face, body, costume, accessories, colors, and materials in every panel;
-- neutral standing posture and neutral expression unless the handoff locks another state;
-- realistic skin pores, hair strands, fabric weave, leather/metal wear, and physically credible soft studio lighting.
+右下独自呈现 180° 完整背面，从后脑、后发、后颈到鞋跟。把脑后的发束、发扣、衣物后领与背缝的具体结构写在这一格。下排三幅等比例，肩线、髋线、鞋底线各自对齐，左、中短颈顶齐平，右侧后脑自然高出。全图仅上排有两张脸，下排仅背面保留头部。
 
-Write the actual name/role title, view labels, and profile facts into the generation prompt along with their placement. Include height/weight when known; if absent, omit the numbers or use the supplied non-numeric body description, without blocking generation or guessing measurements. Use `exactText` only for user-requested verbatim copy, not as permission for ordinary board text. Empty `exactText` does not remove the name or profile. A layout reference supplies this arrangement, not the example's identity, clothing, name, or measurements.
+将具体服装的颜色、层次、版型、厚度、磨损、鞋履及佩饰位置写进相应衣装视角。统一光源，按故事的美术语言表现皮肤、发丝、织物、皮革和金属。上排两幅五官一致，上排与背面的后发衔接，下排三幅身形与服装结构一致。结尾仅收束连续性与画质。
 
-## Prompt content
-
-Restate the handoff's exact:
-
-- name or role label;
-- presented gender and age only when established;
-- height/body description;
-- hair and facial features;
-- skin tone and visible texture;
-- every garment, color, material, fit, and wear state;
-- accessories and their exact side/position;
-- footwear;
-- identity invariants from dependency images.
-
-## Presentation
-
-Present the same character in each view with a complete visible body in the full-body panels, stable proportions, consistent costume and accessory placement, and clear frontal and side face close-ups. Use the neutral studio setting and realistic materials described above. Preserve the supplied identity and state through positive visual description.
-
-Multiple panels of the same character are expected; multiple different people are not.
+原文指定坐姿、轮椅、辅助器具或特殊形态时保持其身体结构和支撑关系。身份或服装参考图按已绑定用途使用，当前取景与输出画幅按本模板。无图片时由剧本文字起稿。已登记的配方与旧计划继续按原记录使用。

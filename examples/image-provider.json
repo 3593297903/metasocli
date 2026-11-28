@@ -2,7 +2,7 @@
   "backend": "api",
   "provider": "yiciyuang",
   "origin": "https://api.yiciyuang.com",
-  "model": "gpt-image-2.5",
+  "model": "gpt-image-2.6-sunburst",
   "quality": "medium",
   "n": 1,
   "response_format": "url",

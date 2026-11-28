@@ -38,7 +38,7 @@ import { readImageJob } from '../images/store.js';
 import { prepareImages } from '../images/preparation.js';
 import { collectImages, imageSummary, imageBlockerCategory } from '../images/reporting.js';
 
-const VERSION = '0.2.1';
+const VERSION = '0.2.2';
 
 export const HELP = `metasocli ${VERSION} — independent Metaso MiniMax-H3 and Seedance 2.5 CLI
 All story commands require --root <dedicated-story-directory>.
@@ -200,7 +200,10 @@ export async function runCli(args: string[], injected?: VideoWorkflowDependencie
     }
     catch { return fail('CLI_ARGUMENT', 'Invalid command options. Run --help; values and secrets are not echoed.'); }
     if (command === 'auth status') return { exitCode: 0, data: { ...(await credentialStatus()), provider: 'Metaso', model: 'MiniMax-H3', liveCheckPerformed: false } };
-    if (command === 'images auth-status') return {exitCode:0,data:{...await imageCredentialStatus(),provider:'yiciyuang',requestedModel:'gpt-image-2.5',liveCheckPerformed:false}};
+    if (command === 'images auth-status') {
+      const {provider, model} = await loadImageProfile();
+      return {exitCode:0,data:{...await imageCredentialStatus(),provider,requestedModel:model,liveCheckPerformed:false}};
+    }
     const root = resolve(required(v, 'root'));
     if(command==='seedance checklist') {
       const data=await seedChecklist(root,required(v,'episode'));

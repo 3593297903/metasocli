@@ -71,7 +71,7 @@ it('waits past the underlying header timeout without changing global transport, 
     });
     const result=await runImages(f.root,plan.planId,true,{client});
     expect(result.summary.registered).toBe(1);expect(calls).toBe(1);
-    expect(JSON.parse(bodies[1]!)).toEqual({model:'gpt-image-2.5',prompt:'asset-000 完整图片提示词：保留所有汉字\n第二行，不改写。',quality:'medium',size:'1024x1024',n:1,response_format:'url'});
+    expect(JSON.parse(bodies[1]!)).toEqual({model:'gpt-image-2.6-sunburst',prompt:'asset-000 完整图片提示词：保留所有汉字\n第二行，不改写。',quality:'medium',size:'1024x1024',n:1,response_format:'url'});
     expect(getGlobalDispatcher()).toBe(agent);
     await runImages(f.root,plan.planId,false,{client});expect(calls).toBe(1);
   }finally{setGlobalDispatcher(previous);await server.close();await agent.destroy();}

@@ -29,15 +29,15 @@ collect 只使用冻结范围、run 中准确 operationId 以及现有 Job/recei
 
 本阶段不改变 all-ready、有效600秒、共享额度、下载/解码队列、视频四名额或 H3 参数。没有第二阶段长期缓存或整剧事务。离线实测与限制见 [本轮实施报告](../.work/image-workflow-implementation-20261102/implementation-report.md)（本机交付证据，不随 npm 包分发），不以准备成功代替真实 API 验收。
 
-本项目默认使用独立 `yiciyuang` 图片后端，请求模型固定 `gpt-image-2.5`。它是供应商别名，请求该名称不证明底层型号。已实现本地 all-ready 工作流；真实生成效果、账户权限、余额、并发/RPM、连接时限和 URL 有效期以实际账户和验收记录为准。
+本项目默认使用独立 `yiciyuang` 图片后端，新计划的默认请求型号为 `gpt-image-2.6-sunburst`。显式指定 `gpt-image-2.5` 的配置和原有冻结计划继续使用 2.5。收图时按原请求型号核对回执。已实现本地 all-ready 工作流；真实生成效果、账户权限、余额、并发/RPM、连接时限和 URL 有效期以实际账户和验收记录为准。
 
-接口依据是公开[专属文档](https://newapi.yiciyuang.com/docs/exclusive-gpt-image-2)：无参考图 POST `https://api.yiciyuang.com/v1/images/generations` JSON；有参考图 POST `/v1/images/edits` multipart，单文件 `image`、多文件按依赖顺序重复 `image[]`。每资产一个完整 prompt、n=1。多文件字段已于2026-10-19以image[]取得真实成功回执并登记文件，不能据此承诺所有供应商请求均成功；没有批量/轮询/task_id 协议，没有自动 POST 重试。
+接口依据见 [2.6 专属文档](https://newapi.yiciyuang.com/docs/exclusive-gpt-image-2-6) 和 [2.5 专属文档](https://newapi.yiciyuang.com/docs/exclusive-gpt-image-2)。无参考图 POST `https://api.yiciyuang.com/v1/images/generations` JSON；有参考图 POST `/v1/images/edits` multipart，单文件 `image`、多文件按依赖顺序重复 `image[]`。每资产一个完整 prompt、n=1。2.5 多文件字段已于2026-10-19以image[]取得真实成功回执并登记文件，不能据此承诺所有供应商请求均成功；没有批量/轮询/task_id 协议，没有自动 POST 重试。
 
 ## 准备配置和独立凭据
 
 开发入口是 `node E:\metasocli\dist\cli\main.js`。先在项目运行 `npm run build`。不安装全局命令。
 
-无密钥配置样例：[image-provider.json](../examples/image-provider.json)。显式 `--profile` 优先，否则读取本安装 `.local/image-provider.json`，文件不存在用契约默认值：api / yiciyuang / gpt-image-2.5 / all-ready。因此无需创建本机配置文件才能使用默认参数。参数随图片计划冻结；修改配置不会改变已有计划。原 Story/Recipe、视频模型和旧计划哈希没有新增默认字段。
+无密钥配置样例：[image-provider.json](../examples/image-provider.json)。显式 `--profile` 优先，否则读取本安装 `.local/image-provider.json`，文件不存在用契约默认值：api / yiciyuang / gpt-image-2.6-sunburst / all-ready。因此无需创建本机配置文件才能使用默认参数。参数随图片计划冻结；修改配置不会改变已有计划。原 Story/Recipe、视频模型和旧计划哈希没有新增默认字段。
 
 图片独立读取 `METASOCLI_IMAGE_API_KEY`，或本安装 `.local/image-credentials.json` 中绑定上述 origin 的 Windows 当前用户 DPAPI 密文。不会使用 `METASO_API_KEY`。没有 `--api-key` 参数；不要将 Key 写入聊天或 JSON 配置。
 
@@ -48,7 +48,7 @@ node E:\metasocli\dist\cli\main.js images auth-status
 
 连接脚本启动短时 loopback 表单并输出 setupUrl；在浏览器打开这个本机地址。表单仅加密保存用户输入，不调用生成或远端认证。已有凭据文件会拒绝覆盖；保存成功只说明本机已配置。此实施任务没有运行连接表单、绑定真实图片账号或读取真实密钥。非 Windows 使用独立环境变量。
 
-默认人物/场景/道具横板1920x1088、竖首帧1088x1920，均不标成2K/4K或精确16:9/9:16。`sizes` 可按 assetId 指定文档列出的1024x1024、1536x1024、1024x1536、1920x1088、1088x1920、2048x2048、2560x1707、1707x2560、4096x4096。原配方明确更高规格时必须配套显式尺寸，不删规格字样绕过检查。
+metasocli、yiciyuang2、metasoclitk 的新竖幅人物由准备入口按本批 assetId 合并 1536x2048。设置方法见[固定图片工作流](../skills/metasocli-reference-images/references/image-workflow.md)。显式冲突会指出资产和原尺寸。每个人物的首稿冻结后一次发出。旧人物无覆盖时沿用 boardSize。默认场景/道具横板1920x1088、竖首帧1088x1920，均不标成2K/4K或精确16:9/9:16。`sizes` 可按 assetId 指定文档列出的1024x1024、1536x1024、1024x1536、1536x2048、1920x1088、1088x1920、2048x2048、2560x1707、1707x2560、4096x4096。原配方明确更高规格时必须配套显式尺寸，不删规格字样绕过检查。
 
 ## 收齐本次范围再提交
 

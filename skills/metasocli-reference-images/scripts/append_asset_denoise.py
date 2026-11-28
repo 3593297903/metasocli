@@ -54,11 +54,15 @@ def normalized(text: str) -> str:
     return handoff.normalize_prompt(text).decode("utf-8")
 
 
-def _compose(prompt: str, kind: str, texts: dict[str, str]) -> tuple[str, str]:
+def _compose(prompt: str, kind: str, texts: dict[str, str], *, new_character_board: bool = False) -> tuple[str, str]:
     text = normalized(prompt)
     if kind in UNTOUCHED:
         # No image policy on audio/first frames, including their original whitespace.
         base, final = prompt, prompt
+    elif new_character_board:
+        if texts["character"].rstrip("\n") in text:
+            raise ValidationError("a new character board contains the packaged retouch instructions; check the unfrozen draft")
+        base, final = text, text
     elif kind not in KINDS:
         raise ValidationError(f"unsupported kind: {kind}")
     else:
@@ -111,6 +115,23 @@ def _header(value, final: bool):
         seen.add(asset_id)
 
 
+def _compose_item(entry, item, prompt_key, texts):
+    kind = handoff.require_string(item["kind"], "kind")
+    tk_character = entry == "metasoclitk" and kind == "character"
+    purpose = item.get("purpose")
+    if "purpose" in item and (not tk_character or purpose not in ("create-board", "retouch")):
+        raise ValidationError("purpose must be create-board or retouch on a metasoclitk character")
+    # New input defaults to first-draft composition. Old final records retain the rule under which they were hashed.
+    if tk_character and purpose is None and prompt_key == "prompt":
+        purpose = "create-board"
+    direct = purpose == "create-board"
+    base, final = _compose(item[prompt_key], kind, texts, new_character_board=direct)
+    suffix = None if direct else texts.get(kind)
+    return {"assetId": item["assetId"], "kind": kind, **({"purpose": purpose} if purpose else {}), "basePrompt": base, "prompt": final,
+            "recipeSha256": hashlib.sha256(handoff.normalize_prompt(final)).hexdigest(),
+            "denoise": {"applied": suffix is not None, "textSha256": hashlib.sha256(suffix.encode()).hexdigest() if suffix else None}}
+
+
 def compose_batch(value):
     if isinstance(value, dict) and "policyVersion" in value:
         check_batch(value)
@@ -121,12 +142,9 @@ def compose_batch(value):
     for item in value["items"]:
         asset_id = item["assetId"]
         try:
-            handoff.require_exact_keys(item, {"assetId", "kind", "prompt"}, "new recipe")
-            kind = handoff.require_string(item["kind"], "kind")
-            base, final = _compose(item["prompt"], kind, texts)
-            result["items"].append({"assetId": asset_id, "kind": kind, "basePrompt": base, "prompt": final,
-                "recipeSha256": hashlib.sha256(handoff.normalize_prompt(final)).hexdigest(),
-                "denoise": {"applied": kind in KINDS, "textSha256": hashlib.sha256(texts[kind].encode("utf-8")).hexdigest() if kind in KINDS else None}})
+            keys = {"assetId", "kind", "prompt"} | ({"purpose"} & item.keys())
+            handoff.require_exact_keys(item, keys, "new recipe")
+            result["items"].append(_compose_item(value["entrySkill"], item, "prompt", texts))
         except (ValidationError, UnicodeError) as error:
             raise ValidationError(f"{asset_id}: {error}") from error
     return result
@@ -140,14 +158,10 @@ def check_batch(value) -> None:
     for item in value["items"]:
         asset_id = item["assetId"]
         try:
-            handoff.require_exact_keys(item, {"assetId", "kind", "basePrompt", "prompt", "recipeSha256", "denoise"}, "final recipe")
-            kind = handoff.require_string(item["kind"], "kind")
-            base, final = _compose(item["basePrompt"], kind, texts)
-            if base != item["basePrompt"] or final != item["prompt"]:
-                raise ValidationError("base/final text mismatch; preserve the complete base and final tail")
-            expected = {"applied": kind in KINDS, "textSha256": hashlib.sha256(texts[kind].encode("utf-8")).hexdigest() if kind in KINDS else None}
-            if item["denoise"] != expected or item["recipeSha256"] != hashlib.sha256(handoff.normalize_prompt(final)).hexdigest():
-                raise ValidationError("final prompt SHA-256 or denoise evidence mismatch")
+            keys = {"assetId", "kind", "basePrompt", "prompt", "recipeSha256", "denoise"} | ({"purpose"} & item.keys())
+            handoff.require_exact_keys(item, keys, "final recipe")
+            if _compose_item(value["entrySkill"], item, "basePrompt", texts) != item:
+                raise ValidationError("base/final prompt, SHA-256 or denoise evidence mismatch")
         except (ValidationError, UnicodeError) as error:
             raise ValidationError(f"{asset_id}: {error}") from error
 

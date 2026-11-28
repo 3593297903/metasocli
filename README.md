@@ -1,6 +1,6 @@
 # metasocli
 
-当前版本为 `0.2.1`，对应 Git 标签 `v0.2.1`。可以用标签或完整提交号定位源码。[0.2.1 版本记录](docs/VERSION_0.2.1.md) · [0.2.0 版本记录](docs/VERSION_0.2.0.md) · [R3 视频容量与恢复](docs/VERSION_SNAPSHOT_20261109_CAPACITY_R3.md) · [一次视频流程](docs/VERSION_SNAPSHOT_20261107_VIDEO_RUN.md) · [一次换提示词](docs/VERSION_SNAPSHOT_20261107_PROMPT_REPLACEMENT.md) · [同 ID 换图](docs/VERSION_SNAPSHOT_20261107_IMAGE_REPLACEMENT.md)
+当前版本为 `0.2.2`，对应 Git 标签 `v0.2.2`。可以用标签或完整提交号定位源码。[0.2.2 版本记录](docs/VERSION_0.2.2.md) · [0.2.1 版本记录](docs/VERSION_0.2.1.md) · [0.2.0 版本记录](docs/VERSION_0.2.0.md) · [R3 视频容量与恢复](docs/VERSION_SNAPSHOT_20261109_CAPACITY_R3.md) · [一次视频流程](docs/VERSION_SNAPSHOT_20261107_VIDEO_RUN.md) · [一次换提示词](docs/VERSION_SNAPSHOT_20261107_PROMPT_REPLACEMENT.md) · [同 ID 换图](docs/VERSION_SNAPSHOT_20261107_IMAGE_REPLACEMENT.md)
 
 独立的 Node.js / TypeScript CLI，支持从完整剧本或成品视频提示词准备素材，通过 Metaso `MiniMax-H3` 或创艺坊 Seedance 2.5 提交、查询、恢复和下载视频。Metaso H3 请求自 2026-09-21 起默认启用 `context_ir_enabled:true`。[创艺坊准备与视频入口](docs/SEEDANCE_SKILL.md)
 
@@ -8,7 +8,7 @@
 
 2026-09-23 已重新构建并通过完整离线检查，见 [上传前核验](docs/UPLOAD_VERIFICATION_20260923.md)。
 
-2026-09-24 图片准备默认使用独立创艺坊 `gpt-image-2.5` API，未指定后端时不再询问；用户明确选择时仍可使用宿主原生生图。先收齐本次全部集/段的配方与导入，再集中提交全部 ready 项，真实图片依赖就绪后立即解锁；下载/解码各2、登记1。视频四并发保持不变。使用独立图片 Key，真实供应商容量需按实际账户验证。见 [图片 API 用法](docs/IMAGE_API_USAGE.md) 和 [实施报告](docs/IMAGE_API_INTEGRATION_IMPLEMENTATION_REPORT.md)。
+新建图片计划默认使用独立创艺坊 `gpt-image-2.6-sunburst` API，未指定后端时不再询问；用户明确选择时仍可使用宿主原生生图。先收齐本次全部集/段的配方与导入，再集中提交全部 ready 项，真实图片依赖就绪后立即解锁；下载/解码各2、登记1。视频四并发保持不变。使用独立图片 Key，真实供应商容量需按实际账户验证。见 [图片 API 用法](docs/IMAGE_API_USAGE.md) 和 [实施报告](docs/IMAGE_API_INTEGRATION_IMPLEMENTATION_REPORT.md)。
 
 ## 构建与本地运行
 
@@ -48,7 +48,9 @@ $metasoclitk
 这里粘贴完整的视频提示词，或指定提示词文件和独立故事目录。
 ```
 
-它复用普通成品提示词入口，在新技能内部用半写实奇幻CG设计板规则完全替换原人物、场景、道具的模板读取与配方组装：人物为面部正侧特写、资料区及正侧背全身五视图；场景为全景、4或8处细节、六类资料及空间机位示意；道具为三分之四主图、结构视图、材质及使用关系。每项直接使用新配方生成，不先画旧类型再转换。完整规则保存在本包，不依赖 jianc 原项目或示例素材，不改变原入口。默认不自动附加旁白；明确要求统一旁白时复用原旁白规则。图片仍使用 gpt-image-2.5 API/all-ready，视频仍使用 H3 inline Context IR 和最多4段持续补位；生成授权与恢复规则不变。
+`$metasocli`、`$metasoclitk` 和 UI 的 `$yiciyuang2`（手打 `$yiciyuang2.5cli`）均在撰写新人物首份提示词时使用 3:4 白底竖幅。上排是正面和左侧 90° 头肩照，下排是无头正面、无头左侧和带完整后脑的背面。一次请求一张图，人物身份与造型按当前故事准备。已指定的排版参考图可随第一次请求发送，人物提示词分别列出要沿用的摆位、目标衣装和道具。[五视图首稿构图](skills/metasocli-reference-images/references/portrait-layout.md)
+
+`$metasoclitk` 复用普通成品提示词入口，在新技能内部用半写实奇幻CG设计板规则完全替换原人物、场景、道具的模板读取与配方组装：人物为 1536×2048 白底竖幅，上排两张头肩肖像，下排正侧短颈衣装及完整背面；场景为全景、4或8处细节、六类资料及空间机位示意；道具为三分之四主图、结构视图、材质及使用关系。每项直接使用新配方生成，不先画旧类型再转换。完整规则保存在本包，jianc 风格只在 metasoclitk 入口使用。默认不自动附加旁白；明确要求统一旁白时复用原旁白规则。图片仍使用 gpt-image-2.6-sunburst API/all-ready，视频仍使用 H3 inline Context IR 和最多4段持续补位；生成授权与恢复规则不变。
 
 `metasoclitk` 是原有五份项目入口之外的新增入口，项目发现目录为 `.agents/skills/metasoclitk/`。本机跨项目入口单独安装到 `C:\Users\Administrator\.codex\skills\metasoclitk/`，读取本包正文及模板，不复制凭据或业务图片。迁移到其他设备时需将入口指向实际安装目录；Git克隆不会自动安装用户级入口。新设备及已有设备按 [metasoclitk 安装与升级](docs/METASOCLITK_DEPLOYMENT.md) 获取包含本技能的提交、构建并验证。安装验证不包含付费生图或视频效果验收。
 
@@ -69,7 +71,7 @@ $metasocli-video-prompts-旁白
 
 图片交接校验器使用 Python 3.10+ 标准库，检查素材/段落分配、完整配方传递、文件哈希和暂存路径；它不做视觉评分或保证出图外观。先 `npm run build`，再 `npm run test:image-skill` 可运行离线交接及 CLI 登记/计划检查；Node CLI 本身不依赖 Python。没有生成新图片或提交视频的测试，不等于真实图片/视频效果验收。
 
-未指定图片后端时按默认 `gpt-image-2.5` API 准备，使用 `all-ready`；图片 Key 未配置时完成离线图片计划并报告缺项，不自动切回宿主生图。默认后端不扩大付费授权，API 生成仍须在用户已授权的供应商与范围内执行；视频未授权时继续停在视频提交前。凭据配置及真实接口验收边界见 [图片 API 用法](docs/IMAGE_API_USAGE.md)。
+未指定图片后端时按默认 `gpt-image-2.6-sunburst` API 准备，使用 `all-ready`；图片 Key 未配置时完成离线图片计划并报告缺项，不自动切回宿主生图。默认后端不扩大付费授权，API 生成仍须在用户已授权的供应商与范围内执行；视频未授权时继续停在视频提交前。凭据配置及真实接口验收边界见 [图片 API 用法](docs/IMAGE_API_USAGE.md)。
 
 ## 两个离线入口
 

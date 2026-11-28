@@ -14,11 +14,17 @@
   "projectId": "当前故事 UUID",
   "entries": [{"episodeId":"ep-01","draftPath":".metasocli/drafts/ep-01/draft.json","requestPath":".metasocli/drafts/ep-01/reference-image-request.json","recipePath":".metasocli/drafts/ep-01/reference-image-recipe.json","replace":false}],
   "scope": {"episodes":["ep-01"]},
-  "profilePath": null
+  "profilePath": ".metasocli/drafts/ep-01/batch-profile.json"
 }
 ```
 
-所有输入相对路径（包括 draft.source）以显式故事根为基准；可明确传绝对输入路径，仍接受现有安全读取检查。scope 只能是 episodes、selection（原有有序选择对象）、assets 三者之一，无隐式全剧范围。entries 必须覆盖选择绑定的各集；它是导入范围，不是逐集生成指令。profilePath=null 解析本安装原有配置并冻结，不读取图片 Key。
+所有输入相对路径以显式故事根为基准，scope 只能是 episodes、selection、assets 三者之一，entries 覆盖所选各集。由 metasocli、yiciyuang2 或 metasoclitk 准备新的竖幅人物时，执行 Skill 运行下列命令，每份交接传一次 --recipe，每个本次新竖幅人物传一次 --asset。工具按结构化的 assetId、kind、planned 状态匹配，保留其他配置与旧人物规格。全部 planned 人物都采用新版时可省略 --asset。存在显式基础配置时传 --profile。将 --out 的结果填入本批 profilePath，独立 images plan 则传同一文件的 --profile。未选新竖幅人物时直接沿用原配置。尺寸冲突先解决再提交。
+
+```text
+node <安装根>/skills/metasocli-reference-images/scripts/character-board-profile.mjs --recipe <新配方.json> --asset <新竖幅人物ID> --out <故事内新批次配置.json>
+```
+
+profilePath=null 解析本安装原有配置并冻结，不读取图片 Key。
 
 ```text
 node <package-root>/dist/cli/main.js images prepare --root <story> --batch <batch.json>

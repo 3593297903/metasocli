@@ -98,7 +98,7 @@ class ImageHandoffTests(unittest.TestCase):
         text = shared.read_text(encoding="utf-8")
         for command in ("images prepare", "images run", "images collect", "submit_unknown"):
             self.assertIn(command, text)
-        for name in ("metasocli", "metasocli-prompt-engine", "metasocli-video-prompts", "metasocli-video-prompts-旁白", "metasoclitk", "metasocli-reference-images"):
+        for name in ("metasocli", "yiciyuang2", "metasocli-prompt-engine", "metasocli-video-prompts", "metasocli-video-prompts-旁白", "metasoclitk", "metasocli-reference-images"):
             body = (ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
             self.assertIn("references/image-workflow.md", body)
         tk = (ROOT / "skills/metasoclitk/SKILL.md").read_text(encoding="utf-8")
@@ -271,10 +271,10 @@ class ImageHandoffTests(unittest.TestCase):
                 result["assets"].append({"assetId":planned["assetId"], "kind":planned["kind"], "status":"generated",
                     "operationId":job["operationId"], "stagedRelativePath":job["result"]["path"], "existingRelativePath":None,
                     "contentSha256":job["result"]["sha256"], "generationPrompt":planned["generationPrompt"], "recipeSha256":planned["recipeSha256"],
-                    "generationMode":"api", "requestedModel":"gpt-image-2.5", "reportedModel":"response-only-alias", "reason":None,
+                    "generationMode":"api", "requestedModel":job["input"]["model"], "reportedModel":"response-only-alias", "reason":None,
                     "executionRelativePath":execution_path, "executionSha256":hashlib.sha256(execution_file.read_bytes()).hexdigest()})
             handoff.validate_result(result, request, recipe, root)
-            for field, value in [("requestedModel", "different-model"), ("reportedModel", "invented-model"), ("executionSha256", "0"*64)]:
+            for field, value in [("requestedModel", "gpt-image-2.5"), ("requestedModel", "different-model"), ("reportedModel", "invented-model"), ("executionSha256", "0"*64)]:
                 invalid=copy.deepcopy(result)
                 invalid["assets"][0][field]=value
                 with self.assertRaises(handoff.ValidationError):
@@ -345,8 +345,24 @@ class AssetDenoiseTests(unittest.TestCase):
         spec.loader.exec_module(cls.tool)
         cls.manifest, cls.texts = cls.tool.load_policy()
 
-    def batch(self, kind="character", prompt="完整基础配方。", entry="metasoclitk"):
-        return {"schemaVersion": 1, "entrySkill": entry, "items": [{"assetId": "new-asset", "kind": kind, "prompt": prompt}]}
+    def batch(self, kind="character", prompt="完整基础配方。", entry="metasoclitk", **fields):
+        return {"schemaVersion": 1, "entrySkill": entry, "items": [{"assetId": "new-asset", "kind": kind, "prompt": prompt, **fields}]}
+
+    def test_new_character_defaults_to_unchanged_first_draft_and_historical_edit_proofs_still_validate(self):
+        base = "上排双肖像。下排正侧无头、背面有完整后脑。"
+        current = self.tool.compose_batch(self.batch(prompt=base))
+        expected = current["items"][0]
+        self.assertEqual(expected["purpose"], "create-board")
+        self.assertEqual(expected["prompt"], base)
+        self.assertEqual(expected["denoise"], {"applied": False, "textSha256": None})
+        self.assertEqual(expected["recipeSha256"], hashlib.sha256(base.encode()).hexdigest())
+        self.assertEqual(self.tool.compose_batch(current), current)
+        with self.assertRaisesRegex(self.tool.ValidationError, "new-asset.*retouch"):
+            self.tool.compose_batch(self.batch(prompt=base + "\n\n" + self.texts["character"]))
+        edited = self.tool.compose_batch(self.batch(prompt=base, purpose="retouch"))
+        self.assertTrue(edited["items"][0]["prompt"].endswith(self.texts["character"]))
+        del edited["items"][0]["purpose"]
+        self.tool.check_batch(edited)
 
     def test_verbatim_text_hashes_and_nine_entry_kind_mappings(self):
         expected = {"character": "fa0c6628aca1e371ffa5bf80657c3b46f14c065f4ba2683e68227d50b4145b71",
@@ -358,7 +374,8 @@ class AssetDenoiseTests(unittest.TestCase):
                 with self.subTest(entry=entry, kind=kind):
                     template_entry = "metasoclitk" if entry == "metasoclitk" else "metasocli-reference-images"
                     base = "本故事事实与尺寸、参考角色保持。\n" + (ROOT / f"skills/{template_entry}/references/{kind}-board.md").read_text(encoding="utf-8")
-                    original = self.batch(kind, base, entry)
+                    fields = {"purpose": "retouch"} if entry == "metasoclitk" and kind == "character" else {}
+                    original = self.batch(kind, base, entry, **fields)
                     saved = copy.deepcopy(original)
                     result = self.tool.compose_batch(original)
                     item = result["items"][0]
@@ -387,15 +404,16 @@ class AssetDenoiseTests(unittest.TestCase):
 
     def test_wrong_kind_duplicate_and_position_errors_report_asset(self):
         for kind in self.tool.KINDS:
+            fields = {"purpose": "retouch"} if kind == "character" else {}
             for other in self.tool.KINDS:
                 if other != kind:
                     with self.assertRaisesRegex(self.tool.ValidationError, "new-asset.*different kind"):
-                        self.tool.compose_batch(self.batch(kind, "基础\n\n" + self.texts[other]))
+                        self.tool.compose_batch(self.batch(kind, "基础\n\n" + self.texts[other], **fields))
             for value, error in [("基础\n\n" + self.texts[kind] * 2, "duplicate"),
                                  ("基础\n\n" + self.texts[kind] + "尺寸说明", "at the end"),
                                  ("基础" + self.texts[kind], "two newlines")]:
                 with self.assertRaisesRegex(self.tool.ValidationError, "new-asset.*" + error):
-                    self.tool.compose_batch(self.batch(kind, value))
+                    self.tool.compose_batch(self.batch(kind, value, **fields))
             with self.assertRaisesRegex(self.tool.ValidationError, "missing"):
                 self.tool.assert_final_prompt("只有基础", kind)
 
