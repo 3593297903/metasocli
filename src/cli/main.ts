@@ -38,7 +38,7 @@ import { readImageJob } from '../images/store.js';
 import { prepareImages } from '../images/preparation.js';
 import { collectImages, imageSummary, imageBlockerCategory } from '../images/reporting.js';
 
-const VERSION = '0.2.2';
+const VERSION = '0.2.3';
 
 export const HELP = `metasocli ${VERSION} — independent Metaso MiniMax-H3 and Seedance 2.5 CLI
 All story commands require --root <dedicated-story-directory>.

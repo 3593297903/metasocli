@@ -13,6 +13,12 @@ Unlike a design board, a first frame is a single cinematic image matching the re
 
 Use dependency character/scene/prop images as labeled references when available. A previous real tail frame locks physical continuity but does not automatically require copying its camera position unless the handoff says so.
 
+For a new first frame authored through `metasocli`, `metasoclitk` or `yiciyuang2`, include this sentence in the first generation prompt:
+
+```text
+暗部和大面积色块过渡连续，抑制随机噪点、彩色噪波和压缩伪影，保留该镜头指定的景深、雨雾、颗粒风格与真实材质纹理。
+```
+
 Dependency images may be used by the host image generator to create this frame. They do not automatically become additional H3 inputs. The resulting video segment must use one `first_frame` input without ordinary reference images or narration audio; if the requested segment combines those modes, return `blocked` without changing the plan or dropping bindings.
 
 As with the other asset kinds, save and display the first output and hand it off using technical file/identity/recipe checks. No automatic visual review, text recognition, score, visual receipt, retry, or per-image confirmation is part of this flow; satisfaction is the user's decision.

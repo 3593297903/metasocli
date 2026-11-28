@@ -350,21 +350,27 @@ class AssetDenoiseTests(unittest.TestCase):
 
     def test_new_character_defaults_to_unchanged_first_draft_and_historical_edit_proofs_still_validate(self):
         base = "上排双肖像。下排正侧无头、背面有完整后脑。"
-        current = self.tool.compose_batch(self.batch(prompt=base))
-        expected = current["items"][0]
-        self.assertEqual(expected["purpose"], "create-board")
-        self.assertEqual(expected["prompt"], base)
-        self.assertEqual(expected["denoise"], {"applied": False, "textSha256": None})
-        self.assertEqual(expected["recipeSha256"], hashlib.sha256(base.encode()).hexdigest())
-        self.assertEqual(self.tool.compose_batch(current), current)
-        with self.assertRaisesRegex(self.tool.ValidationError, "new-asset.*retouch"):
-            self.tool.compose_batch(self.batch(prompt=base + "\n\n" + self.texts["character"]))
-        edited = self.tool.compose_batch(self.batch(prompt=base, purpose="retouch"))
-        self.assertTrue(edited["items"][0]["prompt"].endswith(self.texts["character"]))
-        del edited["items"][0]["purpose"]
-        self.tool.check_batch(edited)
+        for entry in ("metasocli", "metasoclitk", "yiciyuang2"):
+            with self.subTest(entry=entry):
+                current = self.tool.compose_batch(self.batch(prompt=base, entry=entry))
+                expected = current["items"][0]
+                self.assertEqual(expected["purpose"], "create-board")
+                self.assertEqual(expected["prompt"], base)
+                self.assertEqual(expected["denoise"], {"applied": False, "textSha256": None})
+                self.assertEqual(expected["recipeSha256"], hashlib.sha256(base.encode()).hexdigest())
+                self.assertEqual(self.tool.compose_batch(current), current)
+                with self.assertRaisesRegex(self.tool.ValidationError, "new-asset.*retouch"):
+                    self.tool.compose_batch(self.batch(prompt=base + "\n\n" + self.texts["character"], entry=entry))
+                edited = self.tool.compose_batch(self.batch(prompt=base, entry=entry, purpose="retouch"))
+                self.assertTrue(edited["items"][0]["prompt"].endswith(self.texts["character"]))
+                del edited["items"][0]["purpose"]
+                if entry == "metasoclitk":
+                    self.tool.check_batch(edited)
+                else:
+                    with self.assertRaises(self.tool.ValidationError):
+                        self.tool.check_batch(edited)
 
-    def test_verbatim_text_hashes_and_nine_entry_kind_mappings(self):
+    def test_verbatim_text_hashes_and_entry_kind_mappings(self):
         expected = {"character": "fa0c6628aca1e371ffa5bf80657c3b46f14c065f4ba2683e68227d50b4145b71",
                     "scene": "455836fe6522f6663028fbac36009d4d360dae04492a52a4ab1dad0a625199c2",
                     "prop": "b334ee91c91ba678fde1a06c5520ac725e845964039e2093ec2568684ca505ac"}
@@ -374,7 +380,7 @@ class AssetDenoiseTests(unittest.TestCase):
                 with self.subTest(entry=entry, kind=kind):
                     template_entry = "metasoclitk" if entry == "metasoclitk" else "metasocli-reference-images"
                     base = "本故事事实与尺寸、参考角色保持。\n" + (ROOT / f"skills/{template_entry}/references/{kind}-board.md").read_text(encoding="utf-8")
-                    fields = {"purpose": "retouch"} if entry == "metasoclitk" and kind == "character" else {}
+                    fields = {"purpose": "retouch"} if entry in self.tool.PORTRAIT_ENTRIES and kind == "character" else {}
                     original = self.batch(kind, base, entry, **fields)
                     saved = copy.deepcopy(original)
                     result = self.tool.compose_batch(original)
@@ -391,7 +397,7 @@ class AssetDenoiseTests(unittest.TestCase):
                         self.assertEqual(item["prompt"].count(self.texts[other]), int(other == kind))
                     evidence.append({"entry": entry, "kind": kind, "promptSha256": item["recipeSha256"], "textSha256": expected[kind], "count": 1, "atEnd": True})
         if os.environ.get("METASO_TEST_EVIDENCE_DIR"):
-            (Path(os.environ["METASO_TEST_EVIDENCE_DIR"]) / "denoise-nine-mappings.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
+            (Path(os.environ["METASO_TEST_EVIDENCE_DIR"]) / "denoise-entry-mappings.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def test_idempotence_normalization_and_eof_without_trimming_base(self):
         for kind in self.tool.KINDS:
@@ -439,7 +445,7 @@ class AssetDenoiseTests(unittest.TestCase):
         for kind in ("Character", "人物", "unknown"):
             with self.assertRaisesRegex(self.tool.ValidationError, "new-asset.*unsupported kind"):
                 self.tool.compose_batch(self.batch(kind))
-        for entry in ("metasocli", "metasocli-reference-images", "metasocli-prompt-engine"):
+        for entry in ("yiciyuang2.5cli", "metasocli-reference-images", "metasocli-prompt-engine"):
             with self.assertRaises(self.tool.ValidationError):
                 self.tool.compose_batch(self.batch(entry=entry))
         old = self.batch()
@@ -512,11 +518,18 @@ class AssetDenoiseTests(unittest.TestCase):
         self.assertEqual(draft["recipes"][-1], original_voice)
 
     def test_enabled_entry_docs_and_package_resource_links(self):
+        shared = (SCRIPT.parent.parent / "SKILL.md").read_text(encoding="utf-8")
         for entry in self.tool.ENTRIES:
             body = (ROOT / "skills" / entry / "SKILL.md").read_text(encoding="utf-8")
-            self.assertIn("references/denoise-policy.md", body)
-            self.assertIn("append_asset_denoise.py", body)
-            self.assertIn("entrySkill=" + entry, body)
+            if entry in ("metasocli", "yiciyuang2"):
+                self.assertIn("../metasocli-reference-images/SKILL.md", body)
+                self.assertIn(entry, shared)
+                self.assertIn("references/denoise-policy.md", shared)
+                self.assertIn("append_asset_denoise.py", shared)
+            else:
+                self.assertIn("references/denoise-policy.md", body)
+                self.assertIn("append_asset_denoise.py", body)
+                self.assertIn("entrySkill=" + entry, body)
             shim = (ROOT / ".agents/skills" / entry / "SKILL.md").read_text(encoding="utf-8")
             self.assertIn(f"../../../skills/{entry}/SKILL.md", shim)
         policy = (SCRIPT.parent.parent / "references/denoise-policy.md").read_text(encoding="utf-8")

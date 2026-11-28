@@ -1,14 +1,15 @@
 # 新图片配方按 kind 追加去噪原文
 
-只在 `metasoclitk`、`metasocli-video-prompts`、`metasocli-video-prompts-旁白` 三个入口以后新准备、尚未导入和冻结的图片配方启用。继承入口保留实际 entrySkill，只组装一次；不向用户新增“是否去噪”的确认。其他调用者保持原默认行为。
+本规则用于 `metasocli`、`metasoclitk`、`yiciyuang2`（手打 `$yiciyuang2.5cli`）及两个独立成品提示词入口 `metasocli-video-prompts`、`metasocli-video-prompts-旁白` 新准备、尚未导入和冻结的图片配方。继承入口保留最初选择的 entrySkill，整批只组装一次。
 
-先按入口原有完整模板和用户事实写完基础提示词，包括全部布局、尺寸、参考图角色和技术说明；metasoclitk 继续完整采用自己的 jianc 三类模板，另两个入口保留原模板。然后读取包内固定原文，使用本地工具一次处理本次全部新资产。禁止临场默写、摘要、合并或使用旧通用版本。
+按各入口的类型模板与剧本事实写完布局、尺寸、参考图用途和画质要求。metasoclitk 使用自己的 jianc 模板。再用本地工具一次处理全部新配方。
 
-| 已校验 kind | 唯一正文（UTF-8，无 BOM，LF，结尾一个 LF） |
+| 素材类型 | 第一次生图时采用的画质要求 |
 | --- | --- |
-| character | metasoclitk 新人物设定板使用首稿正文。该入口明确修整现图，或独立成品提示词入口制作人物时，按原规则追加[人物全文](denoise/character.txt)。 |
+| character | metasocli、metasoclitk、yiciyuang2 的[五视图首稿](portrait-layout.md)正文自带人物去噪句，布局和画质一同提交。明确修整现图时追加[人物修整全文](denoise/character.txt)。两个独立成品提示词入口继续使用该全文。 |
 | scene | [场景全文](denoise/scene.txt)：场景与环境材质，人物服饰原样 |
 | prop | [道具全文](denoise/prop.txt)：单件道具与多视图结构板 |
+| first_frame | 上述三个五视图入口按[单幅首帧模板](first-frame.md)把首帧去噪句写入新图正文，保留分镜指定的光线、气氛与材质。 |
 
 固定版本和 SHA-256 见 [manifest](denoise/manifest.json)。不得按素材名称、文件名或提示词关键词猜类型。正文中的“原图”、Markdown、正负提示词、标点和段落逐字保留；不要求额外原图、不虚构参考、不先生成底图、不调用第二次去噪接口。
 
@@ -27,7 +28,9 @@ python -X utf8 -B <INSTALL_ROOT>/skills/metasocli-reference-images/scripts/appen
 
 两条使用同一份 [本地组装工具](../scripts/append_asset_denoise.py)，不加载 Key、不联网、不创建或重试任务。由入口执行，不要求用户手写这些辅助文件。输出保留 entrySkill、assetId、kind、basePrompt、最终 prompt、recipeSha256、policyVersion 和 denoise.textSha256；辅助元数据不添加到 Core 严格 schema。
 
-metasoclitk 的新人物默认 purpose=create-board，辅助输出记录 denoise.applied=false。即使附了身份、服装参考图，也使用首稿构图；只有用户指定保留现图构图做材质修整时，才在该项辅助输入显式写 `"purpose":"retouch"`。旧辅助输出缺少 purpose 时用原规则校验，原计划继续原样恢复。需追加画质原文的其他配方使用完整基础文本 + 两个 LF + 对应正文全文，正文位于最后。只允许既有 BOM/CRLF/CR→LF 规范化，不删基础文本的空白和内容。已包含同种全文一次且在末尾时复用，EOF 的 LF 数可规范为固定正文的一个 LF；重复调用或对辅助输出再次 compose 不叠加。同种全文重复、错种全文、尾段后还有文字会报具体 assetId，先在尚未冻结的新配方中核对并修正，完整保留基础配方，不新增生成授权询问。未知 kind 拒绝；first_frame、narration 若用于检查输入则原样返回、denoise.applied=false，旁白仍排除于真实图片交接和请求。
+三个竖幅入口的新人物默认 `purpose=create-board`。即使有身份或服装参考图也按五视图首稿生成。用户明确指定保留现图构图、修整材质时才写 `"purpose":"retouch"`。旧辅助输出缺少 purpose 时用原规则校验。辅助字段 `denoise.applied` 记录工具是否追加了独立全文，首稿正文已写入画质要求的人物和首帧该值为 false。
+
+需要追加的配方使用完整基础文本、两个 LF 和对应类别正文全文。工具沿用既有 BOM 与换行规范化，保留基础文本的空白和内容。重新组装同一输出只保留一份尾段。同种全文重复、错种全文、尾段后另有文字时报告具体 assetId，在未冻结的新配方中修正。未知 kind 拒绝。首帧按基础提示词传递，旁白仅作为音频登记。
 
 工具先追加和核对，再按现有规范化方式计算 recipeSha256；最终含尾段最多 32000 UTF-16 单元，超出则报错，不截断或改写。输出文件不存在才创建；已存在且字节一致复用，否则拒绝覆盖，输入始终只读，不能原地改输入或旧草稿/计划。写入中断留下的不完整辅助输出不得当作成功结果，应选新的准备输出文件，保留旧证据。
 

@@ -43,7 +43,7 @@ python -B scripts/validate_handoff.py recipe <recipe.json> --request <request.js
 
 上面命令保留为手工诊断及 built_in 路径。API 主流程由 [固定图片工作流](references/image-workflow.md) 的 images prepare 调用同一 recipe 校验器（其中已包含 request/draft 核对）及原 import，不重复现场逐集编排。prepare 必须实际通过 Python 校验；缺 Python 时报告具体缺项，不假称完成。校验通过不代替对原文语义的完整阅读。
 
-上游为 metasoclitk、metasocli-video-prompts、metasocli-video-prompts-旁白时，新 planned 配方在保存哈希前按[配方画质规则](references/denoise-policy.md)用包内 append_asset_denoise.py 批量 compose/check。metasoclitk 新人物首稿直接取完整创作正文，输入照片仅供身份或衣装参考也属于首稿。只有用户明确要求保留现图构图修整材质时，才选择 retouch。其他适用素材沿用原尾段。将最终 prompt 同时写入 generationPrompt 和 recipes[].prompt。metasocli 和 yiciyuang2 直接使用首稿。
+来自 metasocli、metasoclitk、yiciyuang2（手打 `$yiciyuang2.5cli`）、metasocli-video-prompts 或 metasocli-video-prompts-旁白的新 planned 配方，在保存哈希前按[配方画质规则](references/denoise-policy.md)运行包内 append_asset_denoise.py 的 compose 和 check。entrySkill 填最初选择的入口，整批组装一次。将工具返回的完整 prompt 同时写入 generationPrompt 和 recipes[].prompt，使用对应的 recipeSha256。
 
 ## 后端选择与 API 全量提交
 

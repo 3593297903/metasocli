@@ -4,7 +4,7 @@
 
 执行前完整读取 [图片执行授权与连续执行](../../../docs/IMAGE_EXECUTION_AUTHORIZATION.md)。当前用户已经要求生成、补齐或再试一次时，沿用该约定中的供应商及必要素材发送授权，直接完成指定范围；不在 prepare 完成、逐图提交、容量恢复或结果登记时重复等待同一确认。若宿主拒绝，按该文档核对授权证据并及时报告；以正式记录更新当前状态，不绕过审批或把旧拒绝误当成新的阻塞。
 
-来自 metasoclitk、metasocli-video-prompts、metasocli-video-prompts-旁白的新配方，先按 [kind 去噪原文规则](denoise-policy.md) 用包内 append_asset_denoise.py 批量 compose/check，再计算最终哈希、填充同一 generationPrompt/recipes[].prompt 并进入下列原有校验和 prepare。其他调用者不自动启用。旧 preparation/plan/job 的恢复和 ready 素材复用不执行追加，不改变原冻结文本或哈希，不新增历史字段门槛；旁白与视频流程不变。
+来自 metasocli、metasoclitk、yiciyuang2 或两个独立成品提示词入口的新配方，先按[图片去噪规则](denoise-policy.md)用包内 append_asset_denoise.py 批量 compose/check，再把同一份最终提示词和对应哈希写入交接与草稿，执行下列校验和 prepare。ready 素材照原记录复用。旧 preparation、plan、job 的恢复继续使用当时冻结的提示词和哈希。
 
 以当前安装根定位 `dist/cli/main.js`。先收齐本次全部集/段的 `draft`、`reference-image-request`、`reference-image-recipe`；保存一份清单，不现场编写导入/执行/结果拼装脚本：
 

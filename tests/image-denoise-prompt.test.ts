@@ -26,17 +26,18 @@ const entries = ['metasocli', 'yiciyuang2', 'metasoclitk', 'metasocli-video-prom
 const json = async (path:string) => JSON.parse(await readFile(path, 'utf8'));
 
 for (const entrySkill of entries) test(`${entrySkill}: exact final prompts survive prepare/jobs and JSON + file-backed multipart`, async () => {
-  const f = await workflowFixture(1, 6), entry = f.batch.entries[0]!;
   const portrait = !entrySkill.startsWith('metasocli-video-prompts');
-  const usesComposer = !portrait || entrySkill === 'metasoclitk';
-  const hasTail = (kind:string) => usesComposer && !(portrait && kind === 'character');
+  const assetKinds = portrait ? [...kinds, 'first_frame' as const] : kinds;
+  const cases = [false, true].flatMap(withReferences => assetKinds.map(kind => ({kind, withReferences})));
+  const f = await workflowFixture(1, cases.length), entry = f.batch.entries[0]!;
+  const hasTail = (kind:string) => kind !== 'first_frame' && !(portrait && kind === 'character');
   const layoutFile = 'skills/metasocli-reference-images/references/portrait-layout.md';
   const layout = await readFile(join(packageRoot,layoutFile),'utf8');
   const paragraphs = [...layout.replace(/\r\n?/gu,'\n').matchAll(/^```text\n([\s\S]*?)\n```$/gmu)].map(match => match[1]!);
   expect(paragraphs).toHaveLength(2);
   const [opening, lower] = paragraphs;
   // Start with the existing board config; derive only the newly authored character sizes.
-  await writeFile(join(f.root,'profile.json'),JSON.stringify({...profile,boardSize:'1920x1088'}));
+  await writeFile(join(f.root,'profile.json'),JSON.stringify({...profile,boardSize:'1920x1088',firstFrameSize:'1088x1920'}));
   const draft = await json(join(f.root, entry.draftPath));
   const request = await json(join(f.root, entry.requestPath));
   const recipe = await json(join(f.root, entry.recipePath));
@@ -44,12 +45,18 @@ for (const entrySkill of entries) test(`${entrySkill}: exact final prompts survi
   if (entrySkill === 'yiciyuang2') for (const s of draft.segments) s.seedance = {assets:[]};
   const inputs = [], texts:Record<string,string> = {};
   for (const kind of kinds) texts[kind] = await readFile(join(packageRoot, `skills/metasocli-reference-images/references/denoise/${kind}.txt`), 'utf8');
-  for (let n = 0; n < 6; n++) {
-    const kind = kinds[n % 3]!, id = `a${n}`, dependencies = n < 3 ? [] : ['a1', 'a0'];
-    const templateEntry = entrySkill === 'metasoclitk' ? entrySkill : 'metasocli-reference-images';
-    const template = kind === 'character' && !portrait ? 'character-board-landscape.md' : `${kind}-board.md`;
+  for (const [n, {kind, withReferences}] of cases.entries()) {
+    const id = `a${n}`, dependencies = withReferences ? ['a1', 'a0'] : [];
+    const templateEntry = entrySkill === 'metasoclitk' && kind !== 'first_frame' ? entrySkill : 'metasocli-reference-images';
+    const template = kind === 'first_frame' ? 'first-frame.md' : kind === 'character' && !portrait ? 'character-board-landscape.md' : `${kind}-board.md`;
     const board = await readFile(join(packageRoot, `skills/${templateEntry}/references/${template}`), 'utf8');
     let body = board;
+    if (kind === 'first_frame') {
+      const sentence = board.replace(/\r\n?/gu,'\n').match(/^```text\n([^\n]+)\n```$/mu)?.[1];
+      expect(sentence).toContain('抑制随机噪点');
+      body = `单幅开场镜头，雨中的旧木门前，信使停步抬头。\n${sentence}`;
+      draft.segments[n].references[0].role = 'first_frame';
+    }
     if (portrait && kind === 'character') {
       const link = entrySkill === 'metasoclitk' ? '../../metasocli-reference-images/references/portrait-layout.md' : 'portrait-layout.md';
       expect(board).toContain(`(${link})`);
@@ -60,29 +67,27 @@ for (const entrySkill of entries) test(`${entrySkill}: exact final prompts survi
     }
     const base = (`完整事实🙂 ${id}。\n` + body).replace(/\r\n?/gu,'\n');
     inputs.push({assetId:id, kind, prompt:base});
-    const exactText = portrait && kind === 'character' ? [] : ['资料标题'];
+    const exactText = kind === 'first_frame' || (portrait && kind === 'character') ? [] : ['资料标题'];
     Object.assign(draft.recipes[n], {kind, dependencies, exactText});
     Object.assign(request.assets[n], {kind, dependencyAssetIds:dependencies, exactText});
     recipe.assets[n].kind = kind;
   }
-  request.assets[0].requiredBySegments = ['s0', 's3', 's4', 's5'];
-  request.assets[1].requiredBySegments = ['s1', 's3', 's4', 's5'];
+  const dependentSegments = cases.flatMap((item, n) => item.withReferences ? [`s${n}`] : []);
+  request.assets[0].requiredBySegments = ['s0', ...dependentSegments];
+  request.assets[1].requiredBySegments = ['s1', ...dependentSegments];
   if (entrySkill.endsWith('旁白')) {
     draft.recipes.push({assetId:'voice', kind:'narration', prompt:'原旁白声线', exactText:[], dependencies:[]});
     draft.segments[0].narration = {assetId:'voice', cues:[{start:0,end:2}]};
   }
   const segmentsBefore = structuredClone(draft.segments), requestBefore = structuredClone(request);
   const inputPath = join(f.root, 'new-recipes.json'), outputPath = join(f.root, 'final-prompts.json');
-  let output = {items:inputs.map(i => ({...i,recipeSha256:sha256Hex(i.prompt)}))};
-  if (usesComposer) {
-    await writeFile(inputPath, JSON.stringify({schemaVersion:1, entrySkill, items:inputs}));
-    const inputBytes = await readFile(inputPath);
-    await execute('python', ['-X','utf8','-B',script,'compose','--input',inputPath,'--output',outputPath], {windowsHide:true});
-    await execute('python', ['-X','utf8','-B',script,'check','--input',outputPath], {windowsHide:true});
-    output = await json(outputPath);
-    expect(await readFile(inputPath)).toEqual(inputBytes);
-  }
-  for (let n = 0; n < 6; n++) {
+  await writeFile(inputPath, JSON.stringify({schemaVersion:1, entrySkill, items:inputs}));
+  const inputBytes = await readFile(inputPath);
+  await execute('python', ['-X','utf8','-B',script,'compose','--input',inputPath,'--output',outputPath], {windowsHide:true});
+  await execute('python', ['-X','utf8','-B',script,'check','--input',outputPath], {windowsHide:true});
+  const output = await json(outputPath);
+  expect(await readFile(inputPath)).toEqual(inputBytes);
+  for (let n = 0; n < cases.length; n++) {
     const final = output.items[n];
     const input = inputs[n]!;
     expect(final.prompt).toBe(input.prompt + (hasTail(input.kind) ? '\n\n' + texts[input.kind] : ''));
@@ -95,7 +100,7 @@ for (const entrySkill of entries) test(`${entrySkill}: exact final prompts survi
     const profileFile=join(f.root,'batch-profile.json');
     await execute(process.execPath,[join(packageRoot,'skills/metasocli-reference-images/scripts/character-board-profile.mjs'),
       '--recipe',join(f.root,entry.recipePath),'--profile',join(f.root,'profile.json'),'--out',profileFile]);
-    expect((await json(profileFile)).sizes).toEqual({a0:'1536x2048',a3:'1536x2048'});
+    expect((await json(profileFile)).sizes).toEqual({a0:'1536x2048',[`a${assetKinds.length}`]:'1536x2048'});
     await writeFile(f.batchPath,JSON.stringify({...f.batch,profilePath:'batch-profile.json'}));
   }
   if (entrySkill === 'metasoclitk') {
@@ -107,7 +112,7 @@ for (const entrySkill of entries) test(`${entrySkill}: exact final prompts survi
   expect(await listImageJobs(f.root)).toEqual([]);
   expect(plan.profile.submissionMode).toBe('all-ready');
   const storyBeforeRun = await loadStory(f.root);
-  expect(storyBeforeRun.episodes[0]!.segments.map(s => s.prompt)).toEqual(Array(6).fill(f.text));
+  expect(storyBeforeRun.episodes[0]!.segments.map(s => s.prompt)).toEqual(Array(cases.length).fill(f.text));
   expect(storyBeforeRun.episodes[0]!.segments.map(s => s.references)).toEqual(segmentsBefore.map((s:any) => s.references));
   if (entrySkill.endsWith('旁白')) {
     const audio = join(f.root, 'voice.wav'); await writeFile(audio, wav());
@@ -122,20 +127,26 @@ for (const entrySkill of entries) test(`${entrySkill}: exact final prompts survi
     const fields = multipart ? Object.fromEntries((init!.body as FormData).entries()) : JSON.parse(String(init!.body));
     const n = output.items.findIndex((item:any) => item.prompt === fields.prompt);
     expect(n).toBeGreaterThanOrEqual(0);
-    const item = plan.items[n]!, kind = kinds[n % 3]!;
-    expect(multipart).toBe(n >= 3);
-    expect(String(url).endsWith(n >= 3 ? '/edits' : '/generations')).toBe(true);
+    const item = plan.items[n]!, {kind, withReferences} = cases[n]!;
+    expect(multipart).toBe(withReferences);
+    expect(String(url).endsWith(withReferences ? '/edits' : '/generations')).toBe(true);
     expect(fields.prompt).toBe(output.items[n].prompt);
     const portraitCharacter = portrait && kind === 'character';
-    expect(fields.size).toBe(portraitCharacter ? '1536x2048' : '1920x1088');
-    expect(fields.prompt.endsWith(texts[kind])).toBe(hasTail(kind));
+    const size = kind === 'first_frame' ? '1088x1920' : portraitCharacter ? '1536x2048' : '1920x1088';
+    expect(fields.size).toBe(size);
+    if (kind !== 'first_frame') expect(fields.prompt.endsWith(texts[kind])).toBe(hasTail(kind));
     for (const other of kinds) expect(fields.prompt.split(texts[other]).length - 1).toBe(Number(other === kind && hasTail(kind)));
     if (portraitCharacter) {
       for (const rule of ['纯白竖幅','正面头肩肖像','鼻尖朝画面右','无头的正面','无头的左侧','180° 完整背面','鞋底线各自对齐']) expect(fields.prompt).toContain(rule);
       expect(fields.prompt).toContain('整页只有两张脸和三个头部轮廓');
       expect(fields.prompt).toContain('只画短颈、身体、手和双脚');
+      expect(fields.prompt.split('抑制随机噪点、彩色噪波和锐化白边')).toHaveLength(2);
       expect(fields.prompt.indexOf(opening)).toBeLessThan(fields.prompt.indexOf(lower));
       expect(fields.prompt.includes('第 1 张图提供排版')).toBe(multipart);
+    }
+    if (kind === 'first_frame') {
+      expect(fields.prompt.split('抑制随机噪点、彩色噪波和压缩伪影')).toHaveLength(2);
+      expect(fields.prompt).toContain('雨中的旧木门');
     }
     expect(fields.model).toBe('gpt-image-2.6-sunburst'); expect(String(fields.n)).toBe('1');
     const files = multipart ? (init!.body as FormData).getAll('image[]') as File[] : [];
@@ -146,11 +157,12 @@ for (const entrySkill of entries) test(`${entrySkill}: exact final prompts survi
     }
     captured.push({assetId:item.assetId, kind, size:fields.size, n:Number(fields.n), transport:multipart?'multipart':'json', prompt:fields.prompt,
       promptHash:sha256Hex(fields.prompt), references:files.map(file=>file.name)});
-    return new Response(JSON.stringify({data:[{b64_json:(portraitCharacter?png(1536,2048,n):png(1920,1088,n)).toString('base64')}]}));
+    const [width,height] = size.split('x').map(Number);
+    return new Response(JSON.stringify({data:[{b64_json:png(width!,height!,n).toString('base64')}]}));
   });
   const deps = {client, runtimeRoot:join(f.root,'runtime')};
   await runImages(f.root, plan.planId, true, deps);
-  expect(captured).toHaveLength(6);
+  expect(captured).toHaveLength(cases.length);
   const jobs = await listImageJobs(f.root);
   for (const item of plan.items) {
     const expected = output.items.find((row:any) => row.assetId === item.assetId);
@@ -166,7 +178,7 @@ for (const entrySkill of entries) test(`${entrySkill}: exact final prompts survi
   expect(await json(join(f.root,entry.requestPath))).toEqual(requestBefore);
   await runImages(f.root, plan.planId, false, deps);
   for (const job of jobs) await recoverImage(f.root,job.operationId,deps);
-  expect(captured).toHaveLength(6);
+  expect(captured).toHaveLength(cases.length);
   expect((await listImageJobs(f.root)).map(j=>j.operationId)).toEqual(jobs.map(j=>j.operationId));
   expect((await collectImages(f.root, {preparation:prepared.preparationId})).complete).toBe(true);
   if (process.env.METASO_TEST_EVIDENCE_DIR) {

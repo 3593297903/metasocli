@@ -1,6 +1,6 @@
 # metasocli
 
-当前版本为 `0.2.2`，对应 Git 标签 `v0.2.2`。可以用标签或完整提交号定位源码。[0.2.2 版本记录](docs/VERSION_0.2.2.md) · [0.2.1 版本记录](docs/VERSION_0.2.1.md) · [0.2.0 版本记录](docs/VERSION_0.2.0.md) · [R3 视频容量与恢复](docs/VERSION_SNAPSHOT_20261109_CAPACITY_R3.md) · [一次视频流程](docs/VERSION_SNAPSHOT_20261107_VIDEO_RUN.md) · [一次换提示词](docs/VERSION_SNAPSHOT_20261107_PROMPT_REPLACEMENT.md) · [同 ID 换图](docs/VERSION_SNAPSHOT_20261107_IMAGE_REPLACEMENT.md)
+当前版本为 `0.2.3`，对应 Git 标签 `v0.2.3`。可以用标签或完整提交号定位源码。[0.2.3 版本记录](docs/VERSION_0.2.3.md) · [0.2.2 版本记录](docs/VERSION_0.2.2.md) · [0.2.1 版本记录](docs/VERSION_0.2.1.md) · [0.2.0 版本记录](docs/VERSION_0.2.0.md) · [R3 视频容量与恢复](docs/VERSION_SNAPSHOT_20261109_CAPACITY_R3.md) · [一次视频流程](docs/VERSION_SNAPSHOT_20261107_VIDEO_RUN.md) · [一次换提示词](docs/VERSION_SNAPSHOT_20261107_PROMPT_REPLACEMENT.md) · [同 ID 换图](docs/VERSION_SNAPSHOT_20261107_IMAGE_REPLACEMENT.md)
 
 独立的 Node.js / TypeScript CLI，支持从完整剧本或成品视频提示词准备素材，通过 Metaso `MiniMax-H3` 或创艺坊 Seedance 2.5 提交、查询、恢复和下载视频。Metaso H3 请求自 2026-09-21 起默认启用 `context_ir_enabled:true`。[创艺坊准备与视频入口](docs/SEEDANCE_SKILL.md)
 

@@ -1,6 +1,6 @@
 {
   "name": "metasocli",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Local story and video task CLI for Metaso H3 and Seedance 2.5",
   "type": "module",
   "private": true,

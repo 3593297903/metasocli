@@ -15,7 +15,8 @@ assert _spec and _spec.loader
 handoff = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(handoff)
 ValidationError = handoff.ValidationError
-ENTRIES = {"metasoclitk", "metasocli-video-prompts", "metasocli-video-prompts-旁白"}
+PORTRAIT_ENTRIES = {"metasocli", "metasoclitk", "yiciyuang2"}
+ENTRIES = PORTRAIT_ENTRIES | {"metasocli-video-prompts", "metasocli-video-prompts-旁白"}
 KINDS = ("character", "scene", "prop")
 UNTOUCHED = {"first_frame", "narration"}
 POLICY_DIR = Path(__file__).resolve().parent.parent / "references/denoise"
@@ -103,7 +104,7 @@ def _header(value, final: bool):
     handoff.require_object(value, "batch")
     handoff.require_exact_keys(value, {"schemaVersion", "entrySkill", "items"} | ({"policyVersion"} if final else set()), "batch")
     if type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1 or value["entrySkill"] not in ENTRIES:
-        raise ValidationError("schemaVersion must be 1 and entrySkill must be one of the three enabled entries")
+        raise ValidationError("schemaVersion must be 1 and entrySkill must be an enabled entry")
     if not isinstance(value["items"], list) or len(value["items"]) > handoff.MAX_ASSETS:
         raise ValidationError("items must be an array of at most 2000 NEW recipes")
     seen = set()
@@ -117,12 +118,12 @@ def _header(value, final: bool):
 
 def _compose_item(entry, item, prompt_key, texts):
     kind = handoff.require_string(item["kind"], "kind")
-    tk_character = entry == "metasoclitk" and kind == "character"
+    portrait_character = entry in PORTRAIT_ENTRIES and kind == "character"
     purpose = item.get("purpose")
-    if "purpose" in item and (not tk_character or purpose not in ("create-board", "retouch")):
-        raise ValidationError("purpose must be create-board or retouch on a metasoclitk character")
-    # New input defaults to first-draft composition. Old final records retain the rule under which they were hashed.
-    if tk_character and purpose is None and prompt_key == "prompt":
+    if "purpose" in item and (not portrait_character or purpose not in ("create-board", "retouch")):
+        raise ValidationError("purpose must be create-board or retouch on a portrait character")
+    # Only historical metasoclitk final records predate the purpose field.
+    if portrait_character and purpose is None and (prompt_key == "prompt" or entry != "metasoclitk"):
         purpose = "create-board"
     direct = purpose == "create-board"
     base, final = _compose(item[prompt_key], kind, texts, new_character_board=direct)
